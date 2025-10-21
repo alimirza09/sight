@@ -1,4 +1,5 @@
 #![no_std]
+use libm::sqrtf;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Color {
@@ -149,7 +150,7 @@ impl<F: Framebuffer> Sight<F> {
 
         let dx = (p2.x - p1.x) as f32;
         let dy = (p2.y - p1.y) as f32;
-        let length = (dx * dx + dy * dy).sqrt();
+        let length = sqrtf(dx * dx + dy * dy);
 
         if length == 0.0 {
             return;
