@@ -176,40 +176,96 @@ impl<F: Framebuffer> Sight<F> {
         }
     }
 
+    fn put_pixel_aa(&mut self, x: i32, y: i32, color: Color, alpha: f32) {
+        if x < 0 || y < 0 || x >= self.width as i32 || y >= self.height as i32 {
+            return;
+        }
+
+        let blended_color = Color::rgba(
+            color.r,
+            color.g,
+            color.b,
+            (color.a as f32 * alpha.clamp(0.0, 1.0)) as u8,
+        );
+
+        let final_color = blended_color.blend(Color::BLACK);
+
+        unsafe {
+            if self
+                .framebuffer
+                .write_pixel(x as u32, y as u32, final_color.to_u32())
+            {
+                self.dirty = true;
+            }
+        }
+    }
+
     pub fn draw_line(&mut self, p1: Point, p2: Point, color: Color) {
-        let mut x0 = p1.x;
-        let mut y0 = p1.y;
-        let x1 = p2.x;
-        let y1 = p2.y;
+        let mut x0 = p1.x as f32;
+        let mut y0 = p1.y as f32;
+        let x1 = p2.x as f32;
+        let y1 = p2.y as f32;
 
-        let dx = (x1 - x0).abs();
-        let dy = -(y1 - y0).abs();
-        let sx = if x0 < x1 { 1 } else { -1 };
-        let sy = if y0 < y1 { 1 } else { -1 };
-        let mut error = dx + dy;
+        let steep = (y1 - y0).abs() > (x1 - x0).abs();
 
-        loop {
-            self.put_pixel(x0, y0, color);
+        if steep {
+            core::mem::swap(&mut x0, &mut y0);
+            core::mem::swap(&mut x0, &mut y0);
+        }
 
-            if x0 == x1 && y0 == y1 {
-                break;
+        let (x0, y0, x1, y1) = if x0 > x1 {
+            (x1, y1, x0, y0)
+        } else {
+            (x0, y0, x1, y1)
+        };
+
+        let dx = x1 - x0;
+        let dy = y1 - y0;
+        let gradient = if dx == 0.0 { 1.0 } else { dy / dx };
+
+        let xend = x0.round();
+        let yend = y0 + gradient * (xend - x0);
+        let xgap = 1.0 - (x0 + 0.5).fract();
+        let xpxl1 = xend as i32;
+        let ypxl1 = yend.floor() as i32;
+
+        if steep {
+            self.put_pixel_aa(ypxl1, xpxl1, color, (1.0 - yend.fract()) * xgap);
+            self.put_pixel_aa(ypxl1 + 1, xpxl1, color, yend.fract() * xgap);
+        } else {
+            self.put_pixel_aa(xpxl1, ypxl1, color, (1.0 - yend.fract()) * xgap);
+            self.put_pixel_aa(xpxl1, ypxl1 + 1, color, yend.fract() * xgap);
+        }
+
+        let mut intery = yend + gradient;
+
+        let xend = x1.round();
+        let yend = y1 + gradient * (xend - x1);
+        let xgap = (x1 + 0.5).fract();
+        let xpxl2 = xend as i32;
+        let ypxl2 = yend.floor() as i32;
+
+        if steep {
+            self.put_pixel_aa(ypxl2, xpxl2, color, (1.0 - yend.fract()) * xgap);
+            self.put_pixel_aa(ypxl2 + 1, xpxl2, color, yend.fract() * xgap);
+        } else {
+            self.put_pixel_aa(xpxl2, ypxl2, color, (1.0 - yend.fract()) * xgap);
+            self.put_pixel_aa(xpxl2, ypxl2 + 1, color, yend.fract() * xgap);
+        }
+
+        for x in (xpxl1 + 1)..xpxl2 {
+            let y = intery.floor() as i32;
+            let frac = intery.fract();
+
+            if steep {
+                self.put_pixel_aa(y, x, color, 1.0 - frac);
+                self.put_pixel_aa(y + 1, x, color, frac);
+            } else {
+                self.put_pixel_aa(x, y, color, 1.0 - frac);
+                self.put_pixel_aa(x, y + 1, color, frac);
             }
 
-            let e2 = 2 * error;
-            if e2 >= dy {
-                if x0 == x1 {
-                    break;
-                }
-                error += dy;
-                x0 += sx;
-            }
-            if e2 <= dx {
-                if y0 == y1 {
-                    break;
-                }
-                error += dx;
-                y0 += sy;
-            }
+            intery += gradient;
         }
     }
 
@@ -268,37 +324,46 @@ impl<F: Framebuffer> Sight<F> {
     }
 
     pub fn draw_circle(&mut self, center: Point, radius: i32, color: Color) {
-        let mut x = 0;
-        let mut y = radius;
-        let mut d = 3 - 2 * radius;
+        let r = radius as f32;
 
-        while x <= y {
-            self.put_pixel(center.x + x, center.y + y, color);
-            self.put_pixel(center.x - x, center.y + y, color);
-            self.put_pixel(center.x + x, center.y - y, color);
-            self.put_pixel(center.x - x, center.y - y, color);
-            self.put_pixel(center.x + y, center.y + x, color);
-            self.put_pixel(center.x - y, center.y + x, color);
-            self.put_pixel(center.x + y, center.y - x, color);
-            self.put_pixel(center.x - y, center.y - x, color);
+        for angle_deg in 0..360 {
+            let angle = (angle_deg as f32) * 3.14159 / 180.0;
+            let x = center.x as f32 + cosf(angle) * r;
+            let y = center.y as f32 + sinf(angle) * r;
 
-            if d < 0 {
-                d += 4 * x + 6;
-            } else {
-                d += 4 * (x - y) + 10;
-                y -= 1;
-            }
-            x += 1;
+            let x_floor = x.floor() as i32;
+            let y_floor = y.floor() as i32;
+            let x_frac = x - x_floor as f32;
+            let y_frac = y - y_floor as f32;
+
+            self.put_pixel_aa(x_floor, y_floor, color, (1.0 - x_frac) * (1.0 - y_frac));
+            self.put_pixel_aa(x_floor + 1, y_floor, color, x_frac * (1.0 - y_frac));
+            self.put_pixel_aa(x_floor, y_floor + 1, color, (1.0 - x_frac) * y_frac);
+            self.put_pixel_aa(x_floor + 1, y_floor + 1, color, x_frac * y_frac);
         }
     }
 
     pub fn fill_circle(&mut self, center: Point, radius: i32, color: Color) {
-        let r_squared = radius * radius;
+        let r = radius as f32;
+        let r_outer = r + 1.0;
+        let r_inner = r - 1.0;
 
-        for y in -radius..=radius {
-            for x in -radius..=radius {
-                if x * x + y * y <= r_squared {
-                    self.put_pixel(center.x + x, center.y + y, color);
+        let min_x = (center.x - radius - 1).max(0);
+        let max_x = (center.x + radius + 1).min(self.width as i32 - 1);
+        let min_y = (center.y - radius - 1).max(0);
+        let max_y = (center.y + radius + 1).min(self.height as i32 - 1);
+
+        for y in min_y..=max_y {
+            for x in min_x..=max_x {
+                let dx = (x - center.x) as f32;
+                let dy = (y - center.y) as f32;
+                let dist = sqrtf(dx * dx + dy * dy);
+
+                if dist <= r_inner {
+                    self.put_pixel(x, y, color);
+                } else if dist < r_outer {
+                    let alpha = r_outer - dist;
+                    self.put_pixel_aa(x, y, color, alpha);
                 }
             }
         }
@@ -454,14 +519,25 @@ impl<F: Framebuffer> Sight<F> {
         end_angle: f32,
         color: Color,
     ) {
-        let steps = (radius as f32 * (end_angle - start_angle).abs() / 2.0) as i32;
-        let steps = steps.max(10);
+        let r = radius as f32;
+        let angle_diff = end_angle - start_angle;
+        let steps = (r * angle_diff.abs() * 2.0) as i32;
+        let steps = steps.max(20);
 
-        for i in 0..steps {
-            let angle = start_angle + (end_angle - start_angle) * (i as f32 / steps as f32);
-            let x = center.x + (cosf(angle) * radius as f32) as i32;
-            let y = center.y + (sinf(angle) * radius as f32) as i32;
-            self.put_pixel(x, y, color);
+        for i in 0..=steps {
+            let angle = start_angle + angle_diff * (i as f32 / steps as f32);
+            let x = center.x as f32 + cosf(angle) * r;
+            let y = center.y as f32 + sinf(angle) * r;
+
+            let x_floor = x.floor() as i32;
+            let y_floor = y.floor() as i32;
+            let x_frac = x - x_floor as f32;
+            let y_frac = y - y_floor as f32;
+
+            self.put_pixel_aa(x_floor, y_floor, color, (1.0 - x_frac) * (1.0 - y_frac));
+            self.put_pixel_aa(x_floor + 1, y_floor, color, x_frac * (1.0 - y_frac));
+            self.put_pixel_aa(x_floor, y_floor + 1, color, (1.0 - x_frac) * y_frac);
+            self.put_pixel_aa(x_floor + 1, y_floor + 1, color, x_frac * y_frac);
         }
     }
 
@@ -551,25 +627,31 @@ impl<F: Framebuffer> Sight<F> {
     }
 
     pub fn draw_bezier_quad(&mut self, p0: Point, p1: Point, p2: Point, color: Color) {
-        let steps = 50;
-        for i in 0..steps {
+        let steps = 100;
+        for i in 0..=steps {
             let t = i as f32 / steps as f32;
             let t_inv = 1.0 - t;
 
-            let x = (t_inv * t_inv * p0.x as f32
-                + 2.0 * t_inv * t * p1.x as f32
-                + t * t * p2.x as f32) as i32;
-            let y = (t_inv * t_inv * p0.y as f32
-                + 2.0 * t_inv * t * p1.y as f32
-                + t * t * p2.y as f32) as i32;
+            let x =
+                t_inv * t_inv * p0.x as f32 + 2.0 * t_inv * t * p1.x as f32 + t * t * p2.x as f32;
+            let y =
+                t_inv * t_inv * p0.y as f32 + 2.0 * t_inv * t * p1.y as f32 + t * t * p2.y as f32;
 
-            self.put_pixel(x, y, color);
+            let x_floor = x.floor() as i32;
+            let y_floor = y.floor() as i32;
+            let x_frac = x - x_floor as f32;
+            let y_frac = y - y_floor as f32;
+
+            self.put_pixel_aa(x_floor, y_floor, color, (1.0 - x_frac) * (1.0 - y_frac));
+            self.put_pixel_aa(x_floor + 1, y_floor, color, x_frac * (1.0 - y_frac));
+            self.put_pixel_aa(x_floor, y_floor + 1, color, (1.0 - x_frac) * y_frac);
+            self.put_pixel_aa(x_floor + 1, y_floor + 1, color, x_frac * y_frac);
         }
     }
 
     pub fn draw_bezier_cubic(&mut self, p0: Point, p1: Point, p2: Point, p3: Point, color: Color) {
-        let steps = 100;
-        for i in 0..steps {
+        let steps = 150;
+        for i in 0..=steps {
             let t = i as f32 / steps as f32;
             let t_inv = 1.0 - t;
             let t_inv2 = t_inv * t_inv;
@@ -577,16 +659,24 @@ impl<F: Framebuffer> Sight<F> {
             let t2 = t * t;
             let t3 = t2 * t;
 
-            let x = (t_inv3 * p0.x as f32
+            let x = t_inv3 * p0.x as f32
                 + 3.0 * t_inv2 * t * p1.x as f32
                 + 3.0 * t_inv * t2 * p2.x as f32
-                + t3 * p3.x as f32) as i32;
-            let y = (t_inv3 * p0.y as f32
+                + t3 * p3.x as f32;
+            let y = t_inv3 * p0.y as f32
                 + 3.0 * t_inv2 * t * p1.y as f32
                 + 3.0 * t_inv * t2 * p2.y as f32
-                + t3 * p3.y as f32) as i32;
+                + t3 * p3.y as f32;
 
-            self.put_pixel(x, y, color);
+            let x_floor = x.floor() as i32;
+            let y_floor = y.floor() as i32;
+            let x_frac = x - x_floor as f32;
+            let y_frac = y - y_floor as f32;
+
+            self.put_pixel_aa(x_floor, y_floor, color, (1.0 - x_frac) * (1.0 - y_frac));
+            self.put_pixel_aa(x_floor + 1, y_floor, color, x_frac * (1.0 - y_frac));
+            self.put_pixel_aa(x_floor, y_floor + 1, color, (1.0 - x_frac) * y_frac);
+            self.put_pixel_aa(x_floor + 1, y_floor + 1, color, x_frac * y_frac);
         }
     }
 
@@ -620,5 +710,25 @@ impl ClampExt for f32 {
         } else {
             self
         }
+    }
+}
+
+trait FloatExt {
+    fn fract(self) -> Self;
+    fn floor(self) -> Self;
+    fn round(self) -> Self;
+}
+
+impl FloatExt for f32 {
+    fn fract(self) -> f32 {
+        self - self.floor()
+    }
+
+    fn floor(self) -> f32 {
+        libm::floorf(self)
+    }
+
+    fn round(self) -> f32 {
+        libm::roundf(self)
     }
 }
