@@ -203,21 +203,20 @@ impl<F: Framebuffer> Sight<F> {
     pub fn draw_line(&mut self, p1: Point, p2: Point, color: Color) {
         let mut x0 = p1.x as f32;
         let mut y0 = p1.y as f32;
-        let x1 = p2.x as f32;
-        let y1 = p2.y as f32;
+        let mut x1 = p2.x as f32;
+        let mut y1 = p2.y as f32;
 
         let steep = (y1 - y0).abs() > (x1 - x0).abs();
 
         if steep {
             core::mem::swap(&mut x0, &mut y0);
-            core::mem::swap(&mut x0, &mut y0);
+            core::mem::swap(&mut x1, &mut y1);
         }
 
-        let (x0, y0, x1, y1) = if x0 > x1 {
-            (x1, y1, x0, y0)
-        } else {
-            (x0, y0, x1, y1)
-        };
+        if x0 > x1 {
+            core::mem::swap(&mut x0, &mut x1);
+            core::mem::swap(&mut y0, &mut y1);
+        }
 
         let dx = x1 - x0;
         let dy = y1 - y0;
@@ -324,23 +323,34 @@ impl<F: Framebuffer> Sight<F> {
     }
 
     pub fn draw_circle(&mut self, center: Point, radius: i32, color: Color) {
-        let r = radius as f32;
+        let mut x = radius;
+        let mut y = 0;
+        let mut err = 0;
 
-        for angle_deg in 0..360 {
-            let angle = (angle_deg as f32) * 3.14159 / 180.0;
-            let x = center.x as f32 + cosf(angle) * r;
-            let y = center.y as f32 + sinf(angle) * r;
+        while x >= y {
+            self.draw_circle_points(center, x, y, color);
 
-            let x_floor = x.floor() as i32;
-            let y_floor = y.floor() as i32;
-            let x_frac = x - x_floor as f32;
-            let y_frac = y - y_floor as f32;
+            if err <= 0 {
+                y += 1;
+                err += 2 * y + 1;
+            }
 
-            self.put_pixel_aa(x_floor, y_floor, color, (1.0 - x_frac) * (1.0 - y_frac));
-            self.put_pixel_aa(x_floor + 1, y_floor, color, x_frac * (1.0 - y_frac));
-            self.put_pixel_aa(x_floor, y_floor + 1, color, (1.0 - x_frac) * y_frac);
-            self.put_pixel_aa(x_floor + 1, y_floor + 1, color, x_frac * y_frac);
+            if err > 0 {
+                x -= 1;
+                err -= 2 * x + 1;
+            }
         }
+    }
+
+    fn draw_circle_points(&mut self, center: Point, x: i32, y: i32, color: Color) {
+        self.put_pixel(center.x + x, center.y + y, color);
+        self.put_pixel(center.x + y, center.y + x, color);
+        self.put_pixel(center.x - y, center.y + x, color);
+        self.put_pixel(center.x - x, center.y + y, color);
+        self.put_pixel(center.x - x, center.y - y, color);
+        self.put_pixel(center.x - y, center.y - x, color);
+        self.put_pixel(center.x + y, center.y - x, color);
+        self.put_pixel(center.x + x, center.y - y, color);
     }
 
     pub fn fill_circle(&mut self, center: Point, radius: i32, color: Color) {
@@ -520,80 +530,68 @@ impl<F: Framebuffer> Sight<F> {
         color: Color,
     ) {
         let r = radius as f32;
-        let angle_diff = end_angle - start_angle;
-        let steps = (r * angle_diff.abs() * 2.0) as i32;
-        let steps = steps.max(20);
+        let pi2 = 6.28318530718;
+
+        let start = start_angle;
+        let mut end = end_angle;
+
+        while end < start {
+            end += pi2;
+        }
+
+        let angle_range = end - start;
+
+        let circumference = pi2 * r;
+        let arc_length = (angle_range / pi2) * circumference;
+        let steps = (arc_length * 2.0) as i32;
+        let steps = steps.max(30).min(1000);
 
         for i in 0..=steps {
-            let angle = start_angle + angle_diff * (i as f32 / steps as f32);
-            let x = center.x as f32 + cosf(angle) * r;
-            let y = center.y as f32 + sinf(angle) * r;
-
-            let x_floor = x.floor() as i32;
-            let y_floor = y.floor() as i32;
-            let x_frac = x - x_floor as f32;
-            let y_frac = y - y_floor as f32;
-
-            self.put_pixel_aa(x_floor, y_floor, color, (1.0 - x_frac) * (1.0 - y_frac));
-            self.put_pixel_aa(x_floor + 1, y_floor, color, x_frac * (1.0 - y_frac));
-            self.put_pixel_aa(x_floor, y_floor + 1, color, (1.0 - x_frac) * y_frac);
-            self.put_pixel_aa(x_floor + 1, y_floor + 1, color, x_frac * y_frac);
+            let t = i as f32 / steps as f32;
+            let angle = start + angle_range * t;
+            let x = center.x + (cosf(angle) * r) as i32;
+            let y = center.y + (sinf(angle) * r) as i32;
+            self.put_pixel(x, y, color);
         }
     }
 
     pub fn draw_rounded_rect(&mut self, rect: Rect, radius: i32, color: Color) {
-        let x2 = rect.x + rect.width as i32 - 1;
-        let y2 = rect.y + rect.height as i32 - 1;
+        if radius <= 0 {
+            self.draw_rect(rect, color);
+            return;
+        }
 
-        self.draw_arc(
-            Point::new(rect.x + radius, rect.y + radius),
-            radius,
-            3.14159,
-            4.71239,
-            color,
-        );
-        self.draw_arc(
-            Point::new(x2 - radius, rect.y + radius),
-            radius,
-            4.71239,
-            6.28318,
-            color,
-        );
-        self.draw_arc(
-            Point::new(x2 - radius, y2 - radius),
-            radius,
-            0.0,
-            1.5708,
-            color,
-        );
-        self.draw_arc(
-            Point::new(rect.x + radius, y2 - radius),
-            radius,
-            1.5708,
-            3.14159,
+        let x = rect.x;
+        let y = rect.y;
+        let w = rect.width as i32;
+        let h = rect.height as i32;
+        let r = radius.min(w / 2).min(h / 2);
+
+        self.draw_line(Point::new(x + r, y), Point::new(x + w - r, y), color);
+
+        self.draw_line(
+            Point::new(x + w, y + r),
+            Point::new(x + w, y + h - r),
             color,
         );
 
         self.draw_line(
-            Point::new(rect.x + radius, rect.y),
-            Point::new(x2 - radius, rect.y),
+            Point::new(x + w - r, y + h),
+            Point::new(x + r, y + h),
             color,
         );
-        self.draw_line(
-            Point::new(x2, rect.y + radius),
-            Point::new(x2, y2 - radius),
-            color,
-        );
-        self.draw_line(
-            Point::new(x2 - radius, y2),
-            Point::new(rect.x + radius, y2),
-            color,
-        );
-        self.draw_line(
-            Point::new(rect.x, y2 - radius),
-            Point::new(rect.x, rect.y + radius),
-            color,
-        );
+
+        self.draw_line(Point::new(x, y + h - r), Point::new(x, y + r), color);
+
+        let pi = 3.14159265359;
+
+        self.draw_arc(Point::new(x + r, y + r), r, pi, pi * 1.5, color);
+
+        self.draw_arc(Point::new(x + w - r, y + r), r, pi * 1.5, pi * 2.0, color);
+
+        self.draw_arc(Point::new(x + w - r, y + h - r), r, 0.0, pi * 0.5, color);
+
+        self.draw_arc(Point::new(x + r, y + h - r), r, pi * 0.5, pi, color);
     }
 
     pub fn fill_gradient_h(&mut self, rect: Rect, start_color: Color, end_color: Color) {
