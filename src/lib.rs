@@ -1,5 +1,7 @@
 #![no_std]
 use libm::{cosf, sinf, sqrtf};
+extern crate alloc;
+pub mod bmp;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Color {
@@ -64,6 +66,7 @@ impl Color {
     pub const GRAY: Color = Color::rgb(128, 128, 128);
     pub const LIGHT_GRAY: Color = Color::rgb(192, 192, 192);
     pub const DARK_GRAY: Color = Color::rgb(64, 64, 64);
+    pub const TRANSPARENT: Color = Color::rgba(0, 0, 0, 0);
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -568,29 +571,22 @@ impl<F: Framebuffer> Sight<F> {
         let r = radius.min(w / 2).min(h / 2);
 
         self.draw_line(Point::new(x + r, y), Point::new(x + w - r, y), color);
-
         self.draw_line(
             Point::new(x + w, y + r),
             Point::new(x + w, y + h - r),
             color,
         );
-
         self.draw_line(
             Point::new(x + w - r, y + h),
             Point::new(x + r, y + h),
             color,
         );
-
         self.draw_line(Point::new(x, y + h - r), Point::new(x, y + r), color);
 
         let pi = 3.14159265359;
-
         self.draw_arc(Point::new(x + r, y + r), r, pi, pi * 1.5, color);
-
         self.draw_arc(Point::new(x + w - r, y + r), r, pi * 1.5, pi * 2.0, color);
-
         self.draw_arc(Point::new(x + w - r, y + h - r), r, 0.0, pi * 0.5, color);
-
         self.draw_arc(Point::new(x + r, y + h - r), r, pi * 0.5, pi, color);
     }
 
@@ -678,6 +674,259 @@ impl<F: Framebuffer> Sight<F> {
         }
     }
 
+    pub fn draw_bmp(&mut self, bmp: &bmp::BmpImage, x: i32, y: i32) {
+        for iy in 0..bmp.height {
+            for ix in 0..bmp.width {
+                let pixel_idx = ((iy * bmp.width + ix) * 4) as usize;
+                if pixel_idx + 3 < bmp.data.len() {
+                    let color = Color::rgba(
+                        bmp.data[pixel_idx + 2],
+                        bmp.data[pixel_idx + 1],
+                        bmp.data[pixel_idx],
+                        bmp.data[pixel_idx + 3],
+                    );
+                    if color.a > 0 {
+                        self.put_pixel(x + ix as i32, y + iy as i32, color);
+                    }
+                }
+            }
+        }
+    }
+
+    pub fn draw_bmp_region(
+        &mut self,
+        bmp: &bmp::BmpImage,
+        src_rect: Rect,
+        dest_x: i32,
+        dest_y: i32,
+    ) {
+        let src_x1 = src_rect.x.max(0) as u32;
+        let src_y1 = src_rect.y.max(0) as u32;
+        let src_x2 = (src_rect.x + src_rect.width as i32).min(bmp.width as i32) as u32;
+        let src_y2 = (src_rect.y + src_rect.height as i32).min(bmp.height as i32) as u32;
+
+        for sy in src_y1..src_y2 {
+            for sx in src_x1..src_x2 {
+                let pixel_idx = ((sy * bmp.width + sx) * 4) as usize;
+                if pixel_idx + 3 < bmp.data.len() {
+                    let color = Color::rgba(
+                        bmp.data[pixel_idx + 2],
+                        bmp.data[pixel_idx + 1],
+                        bmp.data[pixel_idx],
+                        bmp.data[pixel_idx + 3],
+                    );
+                    let dx = dest_x + (sx - src_x1) as i32;
+                    let dy = dest_y + (sy - src_y1) as i32;
+                    if color.a > 0 {
+                        self.put_pixel(dx, dy, color);
+                    }
+                }
+            }
+        }
+    }
+
+    pub fn draw_bmp_scaled(&mut self, bmp: &bmp::BmpImage, dest_rect: Rect) {
+        let dest_x1 = dest_rect.x;
+        let dest_y1 = dest_rect.y;
+        let dest_x2 = dest_rect.x + dest_rect.width as i32;
+        let dest_y2 = dest_rect.y + dest_rect.height as i32;
+
+        for dy in dest_y1..dest_y2 {
+            for dx in dest_x1..dest_x2 {
+                let u = (dx - dest_x1) as f32 / dest_rect.width as f32;
+                let v = (dy - dest_y1) as f32 / dest_rect.height as f32;
+
+                let sx = (u * bmp.width as f32).floor() as u32;
+                let sy = (v * bmp.height as f32).floor() as u32;
+
+                let sx = sx.min(bmp.width - 1);
+                let sy = sy.min(bmp.height - 1);
+
+                let pixel_idx = ((sy * bmp.width + sx) * 4) as usize;
+                if pixel_idx + 3 < bmp.data.len() {
+                    let color = Color::rgba(
+                        bmp.data[pixel_idx + 2],
+                        bmp.data[pixel_idx + 1],
+                        bmp.data[pixel_idx],
+                        bmp.data[pixel_idx + 3],
+                    );
+                    if color.a > 0 {
+                        self.put_pixel(dx, dy, color);
+                    }
+                }
+            }
+        }
+    }
+
+    pub fn draw_bmp_scaled_smooth(&mut self, bmp: &bmp::BmpImage, dest_rect: Rect) {
+        let dest_x1 = dest_rect.x;
+        let dest_y1 = dest_rect.y;
+        let dest_x2 = dest_rect.x + dest_rect.width as i32;
+        let dest_y2 = dest_rect.y + dest_rect.height as i32;
+
+        for dy in dest_y1..dest_y2 {
+            for dx in dest_x1..dest_x2 {
+                let u = (dx - dest_x1) as f32 / dest_rect.width as f32;
+                let v = (dy - dest_y1) as f32 / dest_rect.height as f32;
+
+                let sx = u * (bmp.width - 1) as f32;
+                let sy = v * (bmp.height - 1) as f32;
+
+                let sx0 = sx.floor() as u32;
+                let sy0 = sy.floor() as u32;
+                let sx1 = (sx0 + 1).min(bmp.width - 1);
+                let sy1 = (sy0 + 1).min(bmp.height - 1);
+
+                let fx = sx.fract();
+                let fy = sy.fract();
+
+                let get_color = |px: u32, py: u32| -> Color {
+                    let idx = ((py * bmp.width + px) * 4) as usize;
+                    if idx + 3 < bmp.data.len() {
+                        Color::rgba(
+                            bmp.data[idx + 2],
+                            bmp.data[idx + 1],
+                            bmp.data[idx],
+                            bmp.data[idx + 3],
+                        )
+                    } else {
+                        Color::TRANSPARENT
+                    }
+                };
+
+                let c00 = get_color(sx0, sy0);
+                let c10 = get_color(sx1, sy0);
+                let c01 = get_color(sx0, sy1);
+                let c11 = get_color(sx1, sy1);
+
+                let c0 = c00.lerp(c10, fx);
+                let c1 = c01.lerp(c11, fx);
+                let color = c0.lerp(c1, fy);
+
+                if color.a > 0 {
+                    self.put_pixel(dx, dy, color);
+                }
+            }
+        }
+    }
+
+    pub fn draw_bmp_rotated(&mut self, bmp: &bmp::BmpImage, center: Point, angle: f32) {
+        let cos_a = cosf(angle);
+        let sin_a = sinf(angle);
+        let half_w = bmp.width as f32 / 2.0;
+        let half_h = bmp.height as f32 / 2.0;
+
+        let bound = ((bmp.width.max(bmp.height) as f32 * 1.5) as i32).max(10);
+
+        for dy in -bound..=bound {
+            for dx in -bound..=bound {
+                let rot_x = dx as f32 * cos_a - dy as f32 * sin_a;
+                let rot_y = dx as f32 * sin_a + dy as f32 * cos_a;
+
+                let src_x = rot_x + half_w;
+                let src_y = rot_y + half_h;
+
+                if src_x >= 0.0
+                    && src_x < bmp.width as f32
+                    && src_y >= 0.0
+                    && src_y < bmp.height as f32
+                {
+                    let sx = src_x.floor() as u32;
+                    let sy = src_y.floor() as u32;
+
+                    let pixel_idx = ((sy * bmp.width + sx) * 4) as usize;
+                    if pixel_idx + 3 < bmp.data.len() {
+                        let color = Color::rgba(
+                            bmp.data[pixel_idx + 2],
+                            bmp.data[pixel_idx + 1],
+                            bmp.data[pixel_idx],
+                            bmp.data[pixel_idx + 3],
+                        );
+                        if color.a > 0 {
+                            self.put_pixel(center.x + dx, center.y + dy, color);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    pub fn draw_bmp_tinted(&mut self, bmp: &bmp::BmpImage, x: i32, y: i32, tint: Color) {
+        for iy in 0..bmp.height {
+            for ix in 0..bmp.width {
+                let pixel_idx = ((iy * bmp.width + ix) * 4) as usize;
+                if pixel_idx + 3 < bmp.data.len() {
+                    let color = Color::rgba(
+                        bmp.data[pixel_idx + 2],
+                        bmp.data[pixel_idx + 1],
+                        bmp.data[pixel_idx],
+                        bmp.data[pixel_idx + 3],
+                    );
+                    let tinted = Color::rgba(
+                        ((color.r as u32 * tint.r as u32) / 255) as u8,
+                        ((color.g as u32 * tint.g as u32) / 255) as u8,
+                        ((color.b as u32 * tint.b as u32) / 255) as u8,
+                        ((color.a as u32 * tint.a as u32) / 255) as u8,
+                    );
+                    if tinted.a > 0 {
+                        self.put_pixel(x + ix as i32, y + iy as i32, tinted);
+                    }
+                }
+            }
+        }
+    }
+
+    pub fn draw_bmp_alpha(&mut self, bmp: &bmp::BmpImage, x: i32, y: i32, alpha: f32) {
+        let alpha_u8 = (alpha.clamp(0.0, 1.0) * 255.0) as u8;
+        for iy in 0..bmp.height {
+            for ix in 0..bmp.width {
+                let pixel_idx = ((iy * bmp.width + ix) * 4) as usize;
+                if pixel_idx + 3 < bmp.data.len() {
+                    let color = Color::rgba(
+                        bmp.data[pixel_idx + 2],
+                        bmp.data[pixel_idx + 1],
+                        bmp.data[pixel_idx],
+                        bmp.data[pixel_idx + 3],
+                    );
+                    let new_alpha = ((color.a as u32 * alpha_u8 as u32) / 255) as u8;
+                    if new_alpha > 0 {
+                        let alpha_color = Color::rgba(color.r, color.g, color.b, new_alpha);
+                        self.put_pixel(x + ix as i32, y + iy as i32, alpha_color);
+                    }
+                }
+            }
+        }
+    }
+
+    pub fn draw_bmp_flipped(
+        &mut self,
+        bmp: &bmp::BmpImage,
+        x: i32,
+        y: i32,
+        flip_h: bool,
+        flip_v: bool,
+    ) {
+        for iy in 0..bmp.height {
+            for ix in 0..bmp.width {
+                let src_x = if flip_h { bmp.width - 1 - ix } else { ix };
+                let src_y = if flip_v { bmp.height - 1 - iy } else { iy };
+
+                let pixel_idx = ((src_y * bmp.width + src_x) * 4) as usize;
+                if pixel_idx + 3 < bmp.data.len() {
+                    let color = Color::rgba(
+                        bmp.data[pixel_idx + 2],
+                        bmp.data[pixel_idx + 1],
+                        bmp.data[pixel_idx],
+                        bmp.data[pixel_idx + 3],
+                    );
+                    if color.a > 0 {
+                        self.put_pixel(x + ix as i32, y + iy as i32, color);
+                    }
+                }
+            }
+        }
+    }
+
     pub fn present(&mut self) -> Result<(), &'static str> {
         if !self.dirty {
             return Ok(());
@@ -692,22 +941,6 @@ impl<F: Framebuffer> Sight<F> {
         self.framebuffer.flush()?;
         self.dirty = false;
         Ok(())
-    }
-}
-
-trait ClampExt {
-    fn clamp(self, min: Self, max: Self) -> Self;
-}
-
-impl ClampExt for f32 {
-    fn clamp(self, min: f32, max: f32) -> f32 {
-        if self < min {
-            min
-        } else if self > max {
-            max
-        } else {
-            self
-        }
     }
 }
 
