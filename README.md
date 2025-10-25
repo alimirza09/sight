@@ -10,4 +10,4 @@
 
 ## Licensing
 
-Sight is licensed under an zlib/libpng license. Check [LICENSE](LICENSE) for further details.
+Sight is licensed under a unmodified zlib/libpng license. Check [LICENSE](LICENSE) for further details.
