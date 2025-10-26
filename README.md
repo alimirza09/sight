@@ -5,6 +5,7 @@
 ## Current Progress
 
 - Most 2d shapes support
+- Rounded Rectangles support
 - Anti-Aliasing
 - Drawing of BMP images
 
