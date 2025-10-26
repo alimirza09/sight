@@ -1,6 +1,7 @@
 #![no_std]
 use libm::{cosf, sinf, sqrtf};
 extern crate alloc;
+pub mod bdf;
 pub mod bmp;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
