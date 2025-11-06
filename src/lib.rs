@@ -4,6 +4,27 @@ extern crate alloc;
 pub mod bdf;
 pub mod bmp;
 
+const SYS_GPU_INFO: u64 = 12;
+const SYS_GPU_MAP: u64 = 13;
+const SYS_GPU_FLUSH: u64 = 14;
+
+#[inline(always)]
+fn syscall3(num: u64, a0: u64, a1: u64, a2: u64) -> u64 {
+    let ret: u64;
+    unsafe {
+        core::arch::asm!(
+            "int 0x80",
+            in("rax") num,
+            in("rdi") a0,
+            in("rsi") a1,
+            in("rdx") a2,
+            lateout("rax") ret,
+            options(nostack)
+        );
+    }
+    ret
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Color {
     pub b: u8,
@@ -121,28 +142,35 @@ impl Rect {
     }
 }
 
-pub trait Framebuffer {
-    fn dimensions(&self) -> (u32, u32);
-    unsafe fn write_pixel(&mut self, x: u32, y: u32, color: u32) -> bool;
-    fn flush(&mut self) -> Result<(), &'static str>;
-}
-
-pub struct Sight<F: Framebuffer> {
-    framebuffer: F,
+pub struct Sight {
+    fb: *mut u32,
     width: u32,
     height: u32,
     dirty: bool,
 }
 
-impl<F: Framebuffer> Sight<F> {
-    pub fn new(framebuffer: F) -> Self {
-        let (width, height) = framebuffer.dimensions();
-        Self {
-            framebuffer,
+impl Sight {
+    pub fn new() -> Result<Self, &'static str> {
+        let info = syscall3(SYS_GPU_INFO, 0, 0, 0);
+        if info == u64::MAX {
+            return Err("GPU not available");
+        }
+
+        let width = (info & 0xFFFFFFFF) as u32;
+        let height = (info >> 32) as u32;
+
+        const FB_ADDR: u64 = 0x8000_0000;
+        let mapped = syscall3(SYS_GPU_MAP, FB_ADDR, 0, 0);
+        if mapped == u64::MAX {
+            return Err("Failed to map framebuffer");
+        }
+
+        Ok(Self {
+            fb: mapped as *mut u32,
             width,
             height,
             dirty: false,
-        }
+        })
     }
 
     pub fn width(&self) -> u32 {
@@ -158,7 +186,8 @@ impl<F: Framebuffer> Sight<F> {
         unsafe {
             for y in 0..self.height {
                 for x in 0..self.width {
-                    self.framebuffer.write_pixel(x, y, pixel);
+                    let offset = (y * self.width + x) as usize;
+                    *self.fb.add(offset) = pixel;
                 }
             }
         }
@@ -171,13 +200,10 @@ impl<F: Framebuffer> Sight<F> {
         }
 
         unsafe {
-            if self
-                .framebuffer
-                .write_pixel(x as u32, y as u32, color.to_u32())
-            {
-                self.dirty = true;
-            }
+            let offset = (y as u32 * self.width + x as u32) as usize;
+            *self.fb.add(offset) = color.to_u32();
         }
+        self.dirty = true;
     }
 
     fn put_pixel_aa(&mut self, x: i32, y: i32, color: Color, alpha: f32) {
@@ -195,13 +221,10 @@ impl<F: Framebuffer> Sight<F> {
         let final_color = blended_color.blend(Color::BLACK);
 
         unsafe {
-            if self
-                .framebuffer
-                .write_pixel(x as u32, y as u32, final_color.to_u32())
-            {
-                self.dirty = true;
-            }
+            let offset = (y as u32 * self.width + x as u32) as usize;
+            *self.fb.add(offset) = final_color.to_u32();
         }
+        self.dirty = true;
     }
 
     pub fn draw_line(&mut self, p1: Point, p2: Point, color: Color) {
@@ -383,48 +406,6 @@ impl<F: Framebuffer> Sight<F> {
         }
     }
 
-    pub fn draw_ellipse(&mut self, center: Point, rx: i32, ry: i32, color: Color) {
-        let mut x = 0;
-        let mut y = ry;
-        let rx2 = rx * rx;
-        let ry2 = ry * ry;
-        let mut p = ry2 - (rx2 * ry) + (rx2 / 4);
-
-        while (ry2 * x) <= (rx2 * y) {
-            self.put_pixel(center.x + x, center.y + y, color);
-            self.put_pixel(center.x - x, center.y + y, color);
-            self.put_pixel(center.x + x, center.y - y, color);
-            self.put_pixel(center.x - x, center.y - y, color);
-
-            if p < 0 {
-                x += 1;
-                p += ry2 * (2 * x + 1);
-            } else {
-                x += 1;
-                y -= 1;
-                p += ry2 * (2 * x + 1) - rx2 * (2 * y);
-            }
-        }
-
-        p = ry2 * (x * x + x) + rx2 * (y - 1) * (y - 1) - rx2 * ry2;
-
-        while y >= 0 {
-            self.put_pixel(center.x + x, center.y + y, color);
-            self.put_pixel(center.x - x, center.y + y, color);
-            self.put_pixel(center.x + x, center.y - y, color);
-            self.put_pixel(center.x - x, center.y - y, color);
-
-            if p > 0 {
-                y -= 1;
-                p -= rx2 * (2 * y + 1);
-            } else {
-                x += 1;
-                y -= 1;
-                p += ry2 * (2 * x + 1) - rx2 * (2 * y + 1);
-            }
-        }
-    }
-
     pub fn draw_triangle(&mut self, p1: Point, p2: Point, p3: Point, color: Color) {
         self.draw_line(p1, p2, color);
         self.draw_line(p2, p3, color);
@@ -514,51 +495,6 @@ impl<F: Framebuffer> Sight<F> {
         }
     }
 
-    pub fn draw_polygon(&mut self, points: &[Point], color: Color) {
-        if points.len() < 2 {
-            return;
-        }
-
-        for i in 0..points.len() {
-            let next = (i + 1) % points.len();
-            self.draw_line(points[i], points[next], color);
-        }
-    }
-
-    pub fn draw_arc(
-        &mut self,
-        center: Point,
-        radius: i32,
-        start_angle: f32,
-        end_angle: f32,
-        color: Color,
-    ) {
-        let r = radius as f32;
-        let pi2 = 6.28318530718;
-
-        let start = start_angle;
-        let mut end = end_angle;
-
-        while end < start {
-            end += pi2;
-        }
-
-        let angle_range = end - start;
-
-        let circumference = pi2 * r;
-        let arc_length = (angle_range / pi2) * circumference;
-        let steps = (arc_length * 2.0) as i32;
-        let steps = steps.max(30).min(1000);
-
-        for i in 0..=steps {
-            let t = i as f32 / steps as f32;
-            let angle = start + angle_range * t;
-            let x = center.x + (cosf(angle) * r) as i32;
-            let y = center.y + (sinf(angle) * r) as i32;
-            self.put_pixel(x, y, color);
-        }
-    }
-
     pub fn draw_rounded_rect(&mut self, rect: Rect, radius: i32, color: Color) {
         if radius <= 0 {
             self.draw_rect(rect, color);
@@ -591,6 +527,39 @@ impl<F: Framebuffer> Sight<F> {
         self.draw_arc(Point::new(x + r, y + h - r), r, pi * 0.5, pi, color);
     }
 
+    pub fn draw_arc(
+        &mut self,
+        center: Point,
+        radius: i32,
+        start_angle: f32,
+        end_angle: f32,
+        color: Color,
+    ) {
+        let r = radius as f32;
+        let pi2 = 6.28318530718;
+
+        let start = start_angle;
+        let mut end = end_angle;
+
+        while end < start {
+            end += pi2;
+        }
+
+        let angle_range = end - start;
+        let circumference = pi2 * r;
+        let arc_length = (angle_range / pi2) * circumference;
+        let steps = (arc_length * 2.0) as i32;
+        let steps = steps.max(30).min(1000);
+
+        for i in 0..=steps {
+            let t = i as f32 / steps as f32;
+            let angle = start + angle_range * t;
+            let x = center.x + (cosf(angle) * r) as i32;
+            let y = center.y + (sinf(angle) * r) as i32;
+            self.put_pixel(x, y, color);
+        }
+    }
+
     pub fn fill_gradient_h(&mut self, rect: Rect, start_color: Color, end_color: Color) {
         let x1 = rect.x.max(0);
         let x2 = (rect.x + rect.width as i32).min(self.width as i32);
@@ -621,298 +590,10 @@ impl<F: Framebuffer> Sight<F> {
         }
     }
 
-    pub fn draw_bezier_quad(&mut self, p0: Point, p1: Point, p2: Point, color: Color) {
-        let steps = 100;
-        for i in 0..=steps {
-            let t = i as f32 / steps as f32;
-            let t_inv = 1.0 - t;
-
-            let x =
-                t_inv * t_inv * p0.x as f32 + 2.0 * t_inv * t * p1.x as f32 + t * t * p2.x as f32;
-            let y =
-                t_inv * t_inv * p0.y as f32 + 2.0 * t_inv * t * p1.y as f32 + t * t * p2.y as f32;
-
-            let x_floor = x.floor() as i32;
-            let y_floor = y.floor() as i32;
-            let x_frac = x - x_floor as f32;
-            let y_frac = y - y_floor as f32;
-
-            self.put_pixel_aa(x_floor, y_floor, color, (1.0 - x_frac) * (1.0 - y_frac));
-            self.put_pixel_aa(x_floor + 1, y_floor, color, x_frac * (1.0 - y_frac));
-            self.put_pixel_aa(x_floor, y_floor + 1, color, (1.0 - x_frac) * y_frac);
-            self.put_pixel_aa(x_floor + 1, y_floor + 1, color, x_frac * y_frac);
-        }
-    }
-
-    pub fn draw_bezier_cubic(&mut self, p0: Point, p1: Point, p2: Point, p3: Point, color: Color) {
-        let steps = 150;
-        for i in 0..=steps {
-            let t = i as f32 / steps as f32;
-            let t_inv = 1.0 - t;
-            let t_inv2 = t_inv * t_inv;
-            let t_inv3 = t_inv2 * t_inv;
-            let t2 = t * t;
-            let t3 = t2 * t;
-
-            let x = t_inv3 * p0.x as f32
-                + 3.0 * t_inv2 * t * p1.x as f32
-                + 3.0 * t_inv * t2 * p2.x as f32
-                + t3 * p3.x as f32;
-            let y = t_inv3 * p0.y as f32
-                + 3.0 * t_inv2 * t * p1.y as f32
-                + 3.0 * t_inv * t2 * p2.y as f32
-                + t3 * p3.y as f32;
-
-            let x_floor = x.floor() as i32;
-            let y_floor = y.floor() as i32;
-            let x_frac = x - x_floor as f32;
-            let y_frac = y - y_floor as f32;
-
-            self.put_pixel_aa(x_floor, y_floor, color, (1.0 - x_frac) * (1.0 - y_frac));
-            self.put_pixel_aa(x_floor + 1, y_floor, color, x_frac * (1.0 - y_frac));
-            self.put_pixel_aa(x_floor, y_floor + 1, color, (1.0 - x_frac) * y_frac);
-            self.put_pixel_aa(x_floor + 1, y_floor + 1, color, x_frac * y_frac);
-        }
-    }
-
     pub fn draw_bmp(&mut self, bmp: &bmp::BmpImage, x: i32, y: i32) {
         for iy in 0..bmp.height {
             for ix in 0..bmp.width {
                 let pixel_idx = ((iy * bmp.width + ix) * 4) as usize;
-                if pixel_idx + 3 < bmp.data.len() {
-                    let color = Color::rgba(
-                        bmp.data[pixel_idx + 2],
-                        bmp.data[pixel_idx + 1],
-                        bmp.data[pixel_idx],
-                        bmp.data[pixel_idx + 3],
-                    );
-                    if color.a > 0 {
-                        self.put_pixel(x + ix as i32, y + iy as i32, color);
-                    }
-                }
-            }
-        }
-    }
-
-    pub fn draw_bmp_region(
-        &mut self,
-        bmp: &bmp::BmpImage,
-        src_rect: Rect,
-        dest_x: i32,
-        dest_y: i32,
-    ) {
-        let src_x1 = src_rect.x.max(0) as u32;
-        let src_y1 = src_rect.y.max(0) as u32;
-        let src_x2 = (src_rect.x + src_rect.width as i32).min(bmp.width as i32) as u32;
-        let src_y2 = (src_rect.y + src_rect.height as i32).min(bmp.height as i32) as u32;
-
-        for sy in src_y1..src_y2 {
-            for sx in src_x1..src_x2 {
-                let pixel_idx = ((sy * bmp.width + sx) * 4) as usize;
-                if pixel_idx + 3 < bmp.data.len() {
-                    let color = Color::rgba(
-                        bmp.data[pixel_idx + 2],
-                        bmp.data[pixel_idx + 1],
-                        bmp.data[pixel_idx],
-                        bmp.data[pixel_idx + 3],
-                    );
-                    let dx = dest_x + (sx - src_x1) as i32;
-                    let dy = dest_y + (sy - src_y1) as i32;
-                    if color.a > 0 {
-                        self.put_pixel(dx, dy, color);
-                    }
-                }
-            }
-        }
-    }
-
-    pub fn draw_bmp_scaled(&mut self, bmp: &bmp::BmpImage, dest_rect: Rect) {
-        let dest_x1 = dest_rect.x;
-        let dest_y1 = dest_rect.y;
-        let dest_x2 = dest_rect.x + dest_rect.width as i32;
-        let dest_y2 = dest_rect.y + dest_rect.height as i32;
-
-        for dy in dest_y1..dest_y2 {
-            for dx in dest_x1..dest_x2 {
-                let u = (dx - dest_x1) as f32 / dest_rect.width as f32;
-                let v = (dy - dest_y1) as f32 / dest_rect.height as f32;
-
-                let sx = (u * bmp.width as f32).floor() as u32;
-                let sy = (v * bmp.height as f32).floor() as u32;
-
-                let sx = sx.min(bmp.width - 1);
-                let sy = sy.min(bmp.height - 1);
-
-                let pixel_idx = ((sy * bmp.width + sx) * 4) as usize;
-                if pixel_idx + 3 < bmp.data.len() {
-                    let color = Color::rgba(
-                        bmp.data[pixel_idx + 2],
-                        bmp.data[pixel_idx + 1],
-                        bmp.data[pixel_idx],
-                        bmp.data[pixel_idx + 3],
-                    );
-                    if color.a > 0 {
-                        self.put_pixel(dx, dy, color);
-                    }
-                }
-            }
-        }
-    }
-
-    pub fn draw_bmp_scaled_smooth(&mut self, bmp: &bmp::BmpImage, dest_rect: Rect) {
-        let dest_x1 = dest_rect.x;
-        let dest_y1 = dest_rect.y;
-        let dest_x2 = dest_rect.x + dest_rect.width as i32;
-        let dest_y2 = dest_rect.y + dest_rect.height as i32;
-
-        for dy in dest_y1..dest_y2 {
-            for dx in dest_x1..dest_x2 {
-                let u = (dx - dest_x1) as f32 / dest_rect.width as f32;
-                let v = (dy - dest_y1) as f32 / dest_rect.height as f32;
-
-                let sx = u * (bmp.width - 1) as f32;
-                let sy = v * (bmp.height - 1) as f32;
-
-                let sx0 = sx.floor() as u32;
-                let sy0 = sy.floor() as u32;
-                let sx1 = (sx0 + 1).min(bmp.width - 1);
-                let sy1 = (sy0 + 1).min(bmp.height - 1);
-
-                let fx = sx.fract();
-                let fy = sy.fract();
-
-                let get_color = |px: u32, py: u32| -> Color {
-                    let idx = ((py * bmp.width + px) * 4) as usize;
-                    if idx + 3 < bmp.data.len() {
-                        Color::rgba(
-                            bmp.data[idx + 2],
-                            bmp.data[idx + 1],
-                            bmp.data[idx],
-                            bmp.data[idx + 3],
-                        )
-                    } else {
-                        Color::TRANSPARENT
-                    }
-                };
-
-                let c00 = get_color(sx0, sy0);
-                let c10 = get_color(sx1, sy0);
-                let c01 = get_color(sx0, sy1);
-                let c11 = get_color(sx1, sy1);
-
-                let c0 = c00.lerp(c10, fx);
-                let c1 = c01.lerp(c11, fx);
-                let color = c0.lerp(c1, fy);
-
-                if color.a > 0 {
-                    self.put_pixel(dx, dy, color);
-                }
-            }
-        }
-    }
-
-    pub fn draw_bmp_rotated(&mut self, bmp: &bmp::BmpImage, center: Point, angle: f32) {
-        let cos_a = cosf(angle);
-        let sin_a = sinf(angle);
-        let half_w = bmp.width as f32 / 2.0;
-        let half_h = bmp.height as f32 / 2.0;
-
-        let bound = ((bmp.width.max(bmp.height) as f32 * 1.5) as i32).max(10);
-
-        for dy in -bound..=bound {
-            for dx in -bound..=bound {
-                let rot_x = dx as f32 * cos_a - dy as f32 * sin_a;
-                let rot_y = dx as f32 * sin_a + dy as f32 * cos_a;
-
-                let src_x = rot_x + half_w;
-                let src_y = rot_y + half_h;
-
-                if src_x >= 0.0
-                    && src_x < bmp.width as f32
-                    && src_y >= 0.0
-                    && src_y < bmp.height as f32
-                {
-                    let sx = src_x.floor() as u32;
-                    let sy = src_y.floor() as u32;
-
-                    let pixel_idx = ((sy * bmp.width + sx) * 4) as usize;
-                    if pixel_idx + 3 < bmp.data.len() {
-                        let color = Color::rgba(
-                            bmp.data[pixel_idx + 2],
-                            bmp.data[pixel_idx + 1],
-                            bmp.data[pixel_idx],
-                            bmp.data[pixel_idx + 3],
-                        );
-                        if color.a > 0 {
-                            self.put_pixel(center.x + dx, center.y + dy, color);
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    pub fn draw_bmp_tinted(&mut self, bmp: &bmp::BmpImage, x: i32, y: i32, tint: Color) {
-        for iy in 0..bmp.height {
-            for ix in 0..bmp.width {
-                let pixel_idx = ((iy * bmp.width + ix) * 4) as usize;
-                if pixel_idx + 3 < bmp.data.len() {
-                    let color = Color::rgba(
-                        bmp.data[pixel_idx + 2],
-                        bmp.data[pixel_idx + 1],
-                        bmp.data[pixel_idx],
-                        bmp.data[pixel_idx + 3],
-                    );
-                    let tinted = Color::rgba(
-                        ((color.r as u32 * tint.r as u32) / 255) as u8,
-                        ((color.g as u32 * tint.g as u32) / 255) as u8,
-                        ((color.b as u32 * tint.b as u32) / 255) as u8,
-                        ((color.a as u32 * tint.a as u32) / 255) as u8,
-                    );
-                    if tinted.a > 0 {
-                        self.put_pixel(x + ix as i32, y + iy as i32, tinted);
-                    }
-                }
-            }
-        }
-    }
-
-    pub fn draw_bmp_alpha(&mut self, bmp: &bmp::BmpImage, x: i32, y: i32, alpha: f32) {
-        let alpha_u8 = (alpha.clamp(0.0, 1.0) * 255.0) as u8;
-        for iy in 0..bmp.height {
-            for ix in 0..bmp.width {
-                let pixel_idx = ((iy * bmp.width + ix) * 4) as usize;
-                if pixel_idx + 3 < bmp.data.len() {
-                    let color = Color::rgba(
-                        bmp.data[pixel_idx + 2],
-                        bmp.data[pixel_idx + 1],
-                        bmp.data[pixel_idx],
-                        bmp.data[pixel_idx + 3],
-                    );
-                    let new_alpha = ((color.a as u32 * alpha_u8 as u32) / 255) as u8;
-                    if new_alpha > 0 {
-                        let alpha_color = Color::rgba(color.r, color.g, color.b, new_alpha);
-                        self.put_pixel(x + ix as i32, y + iy as i32, alpha_color);
-                    }
-                }
-            }
-        }
-    }
-
-    pub fn draw_bmp_flipped(
-        &mut self,
-        bmp: &bmp::BmpImage,
-        x: i32,
-        y: i32,
-        flip_h: bool,
-        flip_v: bool,
-    ) {
-        for iy in 0..bmp.height {
-            for ix in 0..bmp.width {
-                let src_x = if flip_h { bmp.width - 1 - ix } else { ix };
-                let src_y = if flip_v { bmp.height - 1 - iy } else { iy };
-
-                let pixel_idx = ((src_y * bmp.width + src_x) * 4) as usize;
                 if pixel_idx + 3 < bmp.data.len() {
                     let color = Color::rgba(
                         bmp.data[pixel_idx + 2],
@@ -933,13 +614,21 @@ impl<F: Framebuffer> Sight<F> {
             return Ok(());
         }
 
-        self.framebuffer.flush()?;
+        let result = syscall3(SYS_GPU_FLUSH, 0, 0, 0);
+        if result == u64::MAX {
+            return Err("Failed to flush GPU");
+        }
+
         self.dirty = false;
         Ok(())
     }
 
     pub fn force_present(&mut self) -> Result<(), &'static str> {
-        self.framebuffer.flush()?;
+        let result = syscall3(SYS_GPU_FLUSH, 0, 0, 0);
+        if result == u64::MAX {
+            return Err("Failed to flush GPU");
+        }
+
         self.dirty = false;
         Ok(())
     }

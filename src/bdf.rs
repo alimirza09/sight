@@ -110,8 +110,6 @@ impl Font {
 }
 
 pub fn parse_bdf_font(data: &[u8]) -> Result<Font, &'static str> {
-    let content = core::str::from_utf8(data).map_err(|_| "Invalid UTF-8")?;
-
     let mut font = Font {
         font_type: FontType::BDF,
         font_name: String::new(),
