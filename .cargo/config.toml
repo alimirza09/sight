@@ -1,0 +1,5 @@
+[unstable]
+build-std = ["core", "alloc"]
+
+[build]
+target = "x86_64-sos.json"
