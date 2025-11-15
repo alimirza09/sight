@@ -14,12 +14,12 @@ fn syscall3(num: u64, a0: u64, a1: u64, a2: u64) -> u64 {
     unsafe {
         core::arch::asm!(
             "int 0x80",
-            in("rax") num,
+            inlateout("rax") num => ret,
             in("rdi") a0,
             in("rsi") a1,
             in("rdx") a2,
-            lateout("rax") ret,
-            options(nostack)
+            lateout("rcx") _,
+            lateout("r11") _,
         );
     }
     ret
@@ -43,7 +43,7 @@ impl Color {
     }
 
     pub const fn to_u32(self) -> u32 {
-        ((self.a as u32) << 24) | ((self.r as u32) << 16) | ((self.g as u32) << 8) | (self.b as u32)
+        (self.b as u32) | ((self.g as u32) << 8) | ((self.r as u32) << 16) | ((self.a as u32) << 24)
     }
 
     pub fn blend(self, background: Color) -> Color {
@@ -143,7 +143,7 @@ impl Rect {
 }
 
 pub struct Sight {
-    fb: *mut u32,
+    pub fb: *mut u32,
     width: u32,
     height: u32,
     dirty: bool,
@@ -156,8 +156,14 @@ impl Sight {
             return Err("GPU not available");
         }
 
-        let width = (info & 0xFFFFFFFF) as u32;
-        let height = (info >> 32) as u32;
+        let width_raw = info & 0xFFFFFFFF;
+        let width = width_raw as u32;
+
+        let height_raw = info >> 32;
+        let height = height_raw as u32;
+
+        let width = if width == 0 { 1024 } else { width };
+        let height = if height == 0 { 768 } else { height };
 
         const FB_ADDR: u64 = 0x8000_0000;
         let mapped = syscall3(SYS_GPU_MAP, FB_ADDR, 0, 0);
@@ -165,8 +171,10 @@ impl Sight {
             return Err("Failed to map framebuffer");
         }
 
+        let fb_ptr = FB_ADDR as *mut u32;
+
         Ok(Self {
-            fb: mapped as *mut u32,
+            fb: fb_ptr,
             width,
             height,
             dirty: false,
@@ -196,12 +204,22 @@ impl Sight {
 
     pub fn put_pixel(&mut self, x: i32, y: i32, color: Color) {
         if x < 0 || y < 0 || x >= self.width as i32 || y >= self.height as i32 {
+            syscall3(2, 1, b"put_pixel: out of bounds\n".as_ptr() as u64, 25);
             return;
         }
 
+        let pixel = color.to_u32();
         unsafe {
             let offset = (y as u32 * self.width + x as u32) as usize;
-            *self.fb.add(offset) = color.to_u32();
+
+            *self.fb.add(offset) = pixel;
+
+            let readback = *self.fb.add(offset);
+            if readback != pixel {
+                syscall3(2, 1, b"ERROR: Write failed!\n".as_ptr() as u64, 21);
+            } else {
+                syscall3(2, 1, b"Pixel written OK\n".as_ptr() as u64, 17);
+            }
         }
         self.dirty = true;
     }
@@ -211,17 +229,25 @@ impl Sight {
             return;
         }
 
-        let blended_color = Color::rgba(
-            color.r,
-            color.g,
-            color.b,
-            (color.a as f32 * alpha.clamp(0.0, 1.0)) as u8,
-        );
-
-        let final_color = blended_color.blend(Color::BLACK);
-
         unsafe {
             let offset = (y as u32 * self.width + x as u32) as usize;
+
+            let existing_u32 = *self.fb.add(offset);
+            let existing = Color {
+                b: (existing_u32 & 0xFF) as u8,
+                g: ((existing_u32 >> 8) & 0xFF) as u8,
+                r: ((existing_u32 >> 16) & 0xFF) as u8,
+                a: ((existing_u32 >> 24) & 0xFF) as u8,
+            };
+
+            let blended_color = Color::rgba(
+                color.r,
+                color.g,
+                color.b,
+                (color.a as f32 * alpha.clamp(0.0, 1.0)) as u8,
+            );
+
+            let final_color = blended_color.blend(existing);
             *self.fb.add(offset) = final_color.to_u32();
         }
         self.dirty = true;
@@ -610,15 +636,26 @@ impl Sight {
     }
 
     pub fn present(&mut self) -> Result<(), &'static str> {
+        syscall3(2, 1, b"present() called, dirty=".as_ptr() as u64, 24);
+        if self.dirty {
+            syscall3(2, 1, b"true\n".as_ptr() as u64, 5);
+        } else {
+            syscall3(2, 1, b"false\n".as_ptr() as u64, 6);
+        }
+
         if !self.dirty {
             return Ok(());
         }
 
+        syscall3(2, 1, b"Calling GPU flush...\n".as_ptr() as u64, 21);
         let result = syscall3(SYS_GPU_FLUSH, 0, 0, 0);
+
         if result == u64::MAX {
+            syscall3(2, 1, b"Flush failed!\n".as_ptr() as u64, 14);
             return Err("Failed to flush GPU");
         }
 
+        syscall3(2, 1, b"Flush succeeded!\n".as_ptr() as u64, 17);
         self.dirty = false;
         Ok(())
     }
@@ -631,6 +668,36 @@ impl Sight {
 
         self.dirty = false;
         Ok(())
+    }
+
+    pub fn test_write(&mut self) {
+        let ptr_val = self.fb as u64;
+        syscall3(2, 1, b"test_write: fb=".as_ptr() as u64, 15);
+        let mut buf = [0u8; 18];
+        buf[0] = b'0';
+        buf[1] = b'x';
+        for i in 0..16 {
+            let nibble = ((ptr_val >> (60 - i * 4)) & 0xF) as u8;
+            buf[i + 2] = if nibble < 10 {
+                b'0' + nibble
+            } else {
+                b'a' + nibble - 10
+            };
+        }
+        syscall3(2, 1, buf.as_ptr() as u64, 18);
+        syscall3(2, 1, b"\n".as_ptr() as u64, 1);
+
+        unsafe {
+            *self.fb = 0xFFFFFFFF;
+            *self.fb.add(1) = 0xFF0000FF;
+            *self.fb.add(2) = 0xFF00FF00;
+            *self.fb.add(3) = 0xFFFF0000;
+
+            for i in 0..100 {
+                *self.fb.add(i) = 0xFFFFFFFF;
+            }
+        }
+        self.dirty = true;
     }
 }
 
