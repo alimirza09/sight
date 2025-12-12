@@ -1,6 +1,5 @@
 #![allow(dead_code)]
-use minifb::{Key, Scale, ScaleMode, Window, WindowOptions};
-use std::collections::BTreeMap;
+use minifb::{Scale, ScaleMode, Window, WindowOptions};
 
 pub mod bdf;
 pub mod bmp;
@@ -135,7 +134,7 @@ impl Sight {
         self.dirty = true;
     }
 
-    fn put_pixel_aa(&mut self, x: i32, y: i32, color: Color, alpha: f32) {
+    fn put_pixel_aa(&mut self, x: i32, y: i32, color: Color, _alpha: f32) {
         if x < 0 || y < 0 || x >= self.width as i32 || y >= self.height as i32 {
             return;
         }
@@ -219,7 +218,7 @@ impl Sight {
         let ny = dx / len;
         let half = thickness as f32 / 2.0;
         for i in 0..thickness {
-            let offset = (i as f32 - half);
+            let offset = i as f32 - half;
             let start = Point::new(
                 (p1.x as f32 + nx * offset) as i32,
                 (p1.y as f32 + ny * offset) as i32,
@@ -280,9 +279,10 @@ impl Sight {
     }
 
     pub fn fill_circle(&mut self, center: Point, radius: u32, color: Color) {
-        for y in -radius as i32..=radius as i32 {
-            for x in -radius as i32..=radius as i32 {
-                if x * x + y * y <= (radius as i32) * (radius as i32) {
+        let r = radius as i32;
+        for y in -r..=r {
+            for x in -r..=r {
+                if x * x + y * y <= r * r {
                     self.put_pixel(center.x + x, center.y + y, color);
                 }
             }
@@ -299,7 +299,7 @@ impl Sight {
         let mut pts = [p1, p2, p3];
         pts.sort_by_key(|p| p.y);
         let (p0, p1, p2) = (pts[0], pts[1], pts[2]);
-        let fill_span = |y: i32, x0: i32, x1: i32| {
+        let mut fill_span = |y: i32, x0: i32, x1: i32| {
             for x in x0..=x1 {
                 self.put_pixel(x, y, color);
             }
@@ -324,23 +324,24 @@ impl Sight {
 
     pub fn draw_rounded_rect(&mut self, r: Rect, rad: u32, color: Color) {
         self.draw_rect(r, color);
+        let rad_i32 = rad as i32;
+
+        self.draw_circle(Point::new(r.x + rad_i32, r.y + rad_i32), rad, color);
         self.draw_circle(
-            Point::new(r.x as i32 + rad as i32, r.y as i32 + rad as i32),
+            Point::new(r.x + r.width as i32 - rad_i32, r.y + rad_i32),
             rad,
             color,
         );
         self.draw_circle(
-            Point::new((r.x + r.width - rad) as i32, r.y as i32 + rad as i32),
+            Point::new(
+                r.x + r.width as i32 - rad_i32,
+                r.y + r.height as i32 - rad_i32,
+            ),
             rad,
             color,
         );
         self.draw_circle(
-            Point::new((r.x + r.width - rad) as i32, (r.y + r.height - rad) as i32),
-            rad,
-            color,
-        );
-        self.draw_circle(
-            Point::new(r.x as i32 + rad, (r.y + r.height - rad) as i32),
+            Point::new(r.x + rad_i32, r.y + r.height as i32 - rad_i32),
             rad,
             color,
         );
