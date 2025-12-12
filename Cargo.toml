@@ -5,7 +5,7 @@ edition = "2021"
 
 [dependencies]
 libm = "0.2"
-
+minifb = "0.28.0"
 
 [lib]
 crate-type = ["rlib"]

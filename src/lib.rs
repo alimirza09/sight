@@ -1,6 +1,6 @@
 use libm::{cosf, sinf, sqrtf};
 use minifb::{Window, WindowOptions};
-use std::Collections::vec::Vec;
+use std::vec::Vec;
 
 pub mod bdf;
 pub mod bmp;
@@ -435,7 +435,6 @@ impl Sight {
         color: Color,
     ) {
         let r = radius as f32;
-        let pi2 = 6.28318530718;
         let mut start = start_angle;
         let end = end_angle;
         while start < end {

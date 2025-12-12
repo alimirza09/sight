@@ -1,6 +1,5 @@
-use alloc::collections::BTreeMap;
-use alloc::string::String;
-use alloc::vec::Vec;
+use std::collections::BTreeMap;
+use std::vec::Vec;
 
 #[derive(Debug, Clone)]
 pub enum FontType {
