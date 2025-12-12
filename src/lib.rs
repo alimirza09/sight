@@ -116,11 +116,9 @@ pub struct Sight {
 }
 
 impl Sight {
-    pub fn new() -> Result<Self, &'static str> {
-        let width = 1024;
-        let height = 768;
+    pub fn new(width: u32, height: u32, name: &str) -> Result<Self, &'static str> {
         let window = Window::new(
-            "Sight",
+            name,
             width as usize,
             height as usize,
             WindowOptions {
@@ -129,7 +127,7 @@ impl Sight {
                 ..WindowOptions::default()
             },
         )
-        .map_err(|_| "Failed to create window")?;
+        .map_err(|_| "Failed to create window {}")?;
         let fb = vec![0u32; (width * height) as usize];
         Ok(Self {
             fb,
