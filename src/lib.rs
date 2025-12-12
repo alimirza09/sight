@@ -294,7 +294,7 @@ impl Sight {
         self.draw_line(p3, p1, color);
     }
 
-    pub fn fill_triangle(&mut self, mut p1: Point, mut p2: Point, mut p3: Point, color: Color) {
+    pub fn fill_triangle(&mut self, p1: Point, p2: Point, p3: Point, color: Color) {
         let mut pts = [p1, p2, p3];
         pts.sort_by_key(|p| p.y);
         let [p0, p1, p2] = pts;
