@@ -1,6 +1,6 @@
 #![allow(dead_code)]
+use libm::{cosf, sinf, sqrtf};
 use minifb::{Scale, ScaleMode, Window, WindowOptions};
-
 pub mod bdf;
 pub mod bmp;
 
@@ -11,40 +11,13 @@ pub struct Color {
     pub b: u8,
     pub a: u8,
 }
+
 impl Color {
     pub const fn rgb(r: u8, g: u8, b: u8) -> Self {
         Self { r, g, b, a: 255 }
     }
     pub const fn rgba(r: u8, g: u8, b: u8, a: u8) -> Self {
         Self { r, g, b, a }
-    }
-    pub fn to_u32(self) -> u32 {
-        (self.b as u32) | ((self.g as u32) << 8) | ((self.r as u32) << 16) | ((self.a as u32) << 24)
-    }
-    pub fn blend(self, bg: Color) -> Color {
-        let a = self.a as u32;
-        if a == 255 {
-            return self;
-        }
-        if a == 0 {
-            return bg;
-        }
-        let inv = 255 - a;
-        Color {
-            r: ((self.r as u32 * a + bg.r as u32 * inv) / 255) as u8,
-            g: ((self.g as u32 * a + bg.g as u32 * inv) / 255) as u8,
-            b: ((self.b as u32 * a + bg.b as u32 * inv) / 255) as u8,
-            a: 255,
-        }
-    }
-    pub fn lerp(self, other: Color, t: f32) -> Color {
-        let t = t.clamp(0.0, 1.0);
-        Color {
-            r: (self.r as f32 + (other.r as f32 - self.r as f32) * t) as u8,
-            g: (self.g as f32 + (other.g as f32 - self.g as f32) * t) as u8,
-            b: (self.b as f32 + (other.b as f32 - self.b as f32) * t) as u8,
-            a: (self.a as f32 + (other.a as f32 - self.a as f32) * t) as u8,
-        }
     }
 
     pub const BLACK: Color = Color::rgb(0, 0, 0);
@@ -61,6 +34,37 @@ impl Color {
     pub const LIGHT_GRAY: Color = Color::rgb(192, 192, 192);
     pub const DARK_GRAY: Color = Color::rgb(64, 64, 64);
     pub const TRANSPARENT: Color = Color::rgba(0, 0, 0, 0);
+
+    pub fn to_u32(self) -> u32 {
+        (self.b as u32) | ((self.g as u32) << 8) | ((self.r as u32) << 16) | ((self.a as u32) << 24)
+    }
+
+    pub fn blend(self, bg: Color) -> Color {
+        if self.a == 255 {
+            return self;
+        }
+        if self.a == 0 {
+            return bg;
+        }
+        let alpha = self.a as u32;
+        let inv_alpha = 255 - alpha;
+        Color {
+            r: ((self.r as u32 * alpha + bg.r as u32 * inv_alpha) / 255) as u8,
+            g: ((self.g as u32 * alpha + bg.g as u32 * inv_alpha) / 255) as u8,
+            b: ((self.b as u32 * alpha + bg.b as u32 * inv_alpha) / 255) as u8,
+            a: 255,
+        }
+    }
+
+    pub fn lerp(self, other: Color, t: f32) -> Color {
+        let t = t.clamp(0.0, 1.0);
+        Color {
+            r: (self.r as f32 + (other.r as f32 - self.r as f32) * t) as u8,
+            g: (self.g as f32 + (other.g as f32 - self.g as f32) * t) as u8,
+            b: (self.b as f32 + (other.b as f32 - self.b as f32) * t) as u8,
+            a: (self.a as f32 + (other.a as f32 - self.a as f32) * t) as u8,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -72,7 +76,13 @@ impl Point {
     pub const fn new(x: i32, y: i32) -> Self {
         Self { x, y }
     }
+    pub fn distance_to(&self, other: Point) -> f32 {
+        let dx = (other.x - self.x) as f32;
+        let dy = (other.y - self.y) as f32;
+        sqrtf(dx * dx + dy * dy)
+    }
 }
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Rect {
     pub x: i32,
@@ -89,10 +99,16 @@ impl Rect {
             height,
         }
     }
+    pub fn contains(&self, p: Point) -> bool {
+        p.x >= self.x
+            && p.x < self.x + self.width as i32
+            && p.y >= self.y
+            && p.y < self.y + self.height as i32
+    }
 }
 
 pub struct Sight {
-    buffer: Vec<u32>,
+    fb: Vec<u32>,
     window: Window,
     width: u32,
     height: u32,
@@ -101,23 +117,22 @@ pub struct Sight {
 
 impl Sight {
     pub fn new() -> Result<Self, &'static str> {
-        let width = 800;
-        let height = 600;
-        let buffer = vec![0u32; (width * height) as usize];
+        let width = 1024;
+        let height = 768;
         let window = Window::new(
-            "Sight ported to minifb",
+            "Sight",
             width as usize,
             height as usize,
             WindowOptions {
-                resize: true,
                 scale: Scale::X2,
                 scale_mode: ScaleMode::AspectRatioStretch,
-                ..Default::default()
+                ..WindowOptions::default()
             },
         )
         .map_err(|_| "Failed to create window")?;
+        let fb = vec![0u32; (width * height) as usize];
         Ok(Self {
-            buffer,
+            fb,
             window,
             width,
             height,
@@ -133,7 +148,10 @@ impl Sight {
     }
 
     pub fn clear(&mut self, color: Color) {
-        self.buffer.fill(color.to_u32());
+        let pixel = color.to_u32();
+        for v in self.fb.iter_mut() {
+            *v = pixel;
+        }
         self.dirty = true;
     }
 
@@ -142,7 +160,7 @@ impl Sight {
             return;
         }
         let idx = (y as u32 * self.width + x as u32) as usize;
-        self.buffer[idx] = color.to_u32();
+        self.fb[idx] = color.to_u32();
         self.dirty = true;
     }
 
@@ -151,15 +169,14 @@ impl Sight {
             return;
         }
         let idx = (y as u32 * self.width + x as u32) as usize;
-        let existing = self.buffer[idx];
-        let existing = Color {
-            b: (existing & 0xFF) as u8,
-            g: ((existing >> 8) & 0xFF) as u8,
-            r: ((existing >> 16) & 0xFF) as u8,
-            a: 255,
-        };
+        let existing = Color::rgba(
+            ((self.fb[idx] >> 16) & 0xFF) as u8,
+            ((self.fb[idx] >> 8) & 0xFF) as u8,
+            (self.fb[idx] & 0xFF) as u8,
+            255,
+        );
         let blended = color.blend(existing);
-        self.buffer[idx] = blended.to_u32();
+        self.fb[idx] = blended.to_u32();
         self.dirty = true;
     }
 
@@ -180,32 +197,8 @@ impl Sight {
         let dx = x1 - x0;
         let dy = y1 - y0;
         let gradient = if dx == 0.0 { 1.0 } else { dy / dx };
-        let xend = x0.round();
-        let yend = y0 + gradient * (xend - x0);
-        let xgap = 1.0 - (x0 + 0.5).fract();
-        let xpxl1 = xend as i32;
-        let ypxl1 = yend.floor() as i32;
-        if steep {
-            self.put_pixel_aa(ypxl1, xpxl1, color, (1.0 - yend.fract()) * xgap);
-            self.put_pixel_aa(ypxl1 + 1, xpxl1, color, yend.fract() * xgap);
-        } else {
-            self.put_pixel_aa(xpxl1, ypxl1, color, (1.0 - yend.fract()) * xgap);
-            self.put_pixel_aa(xpxl1, ypxl1 + 1, color, yend.fract() * xgap);
-        }
-        let mut intery = yend + gradient;
-        let xend = x1.round();
-        let yend = y1 + gradient * (xend - x1);
-        let xgap = (x1 + 0.5).fract();
-        let xpxl2 = xend as i32;
-        let ypxl2 = yend.floor() as i32;
-        if steep {
-            self.put_pixel_aa(ypxl2, xpxl2, color, (1.0 - yend.fract()) * xgap);
-            self.put_pixel_aa(ypxl2 + 1, xpxl2, color, yend.fract() * xgap);
-        } else {
-            self.put_pixel_aa(xpxl2, ypxl2, color, (1.0 - yend.fract()) * xgap);
-            self.put_pixel_aa(xpxl2, ypxl2 + 1, color, yend.fract() * xgap);
-        }
-        for x in (xpxl1 + 1)..xpxl2 {
+        let mut intery = y0 + gradient;
+        for x in x0 as i32..=x1 as i32 {
             let y = intery.floor() as i32;
             let frac = intery.fract();
             if steep {
@@ -219,83 +212,77 @@ impl Sight {
         }
     }
 
-    pub fn draw_thick_line(&mut self, p1: Point, p2: Point, thickness: u32, color: Color) {
-        let dx = (p2.x - p1.x) as f32;
-        let dy = (p2.y - p1.y) as f32;
-        let len = (dx * dx + dy * dy).sqrt();
-        if len == 0.0 {
-            return;
-        }
-        let nx = -dy / len;
-        let ny = dx / len;
-        let half = thickness as f32 / 2.0;
-        for i in 0..thickness {
-            let offset = i as f32 - half;
-            let start = Point::new(
-                (p1.x as f32 + nx * offset) as i32,
-                (p1.y as f32 + ny * offset) as i32,
-            );
-            let end = Point::new(
-                (p2.x as f32 + nx * offset) as i32,
-                (p2.y as f32 + ny * offset) as i32,
-            );
-            self.draw_line(start, end, color);
-        }
+    pub fn draw_rect(&mut self, rect: Rect, color: Color) {
+        self.draw_line(
+            Point::new(rect.x, rect.y),
+            Point::new(rect.x + rect.width as i32 - 1, rect.y),
+            color,
+        );
+        self.draw_line(
+            Point::new(rect.x + rect.width as i32 - 1, rect.y),
+            Point::new(
+                rect.x + rect.width as i32 - 1,
+                rect.y + rect.height as i32 - 1,
+            ),
+            color,
+        );
+        self.draw_line(
+            Point::new(
+                rect.x + rect.width as i32 - 1,
+                rect.y + rect.height as i32 - 1,
+            ),
+            Point::new(rect.x, rect.y + rect.height as i32 - 1),
+            color,
+        );
+        self.draw_line(
+            Point::new(rect.x, rect.y + rect.height as i32 - 1),
+            Point::new(rect.x, rect.y),
+            color,
+        );
     }
 
-    pub fn draw_rect(&mut self, r: Rect, color: Color) {
-        let p1 = Point::new(r.x, r.y);
-        let p2 = Point::new(r.x + r.width as i32, r.y);
-        let p3 = Point::new(r.x + r.width as i32, r.y + r.height as i32);
-        let p4 = Point::new(r.x, r.y + r.height as i32);
-        self.draw_line(p1, p2, color);
-        self.draw_line(p2, p3, color);
-        self.draw_line(p3, p4, color);
-        self.draw_line(p4, p1, color);
-    }
-
-    pub fn fill_rect(&mut self, r: Rect, color: Color) {
-        for y in r.y..(r.y + r.height as i32) {
-            for x in r.x..(r.x + r.width as i32) {
+    pub fn fill_rect(&mut self, rect: Rect, color: Color) {
+        for y in rect.y..(rect.y + rect.height as i32) {
+            for x in rect.x..(rect.x + rect.width as i32) {
                 self.put_pixel(x, y, color);
             }
         }
     }
 
-    pub fn draw_circle(&mut self, center: Point, radius: u32, color: Color) {
-        let r = radius as i32;
-        let mut x = 0;
-        let mut y = r;
-        let mut d = 1 - r;
-        while x <= y {
-            for &(dx, dy) in &[
-                (x, y),
-                (y, x),
-                (-x, y),
-                (-y, x),
-                (x, -y),
-                (y, -x),
-                (-x, -y),
-                (-y, -x),
-            ] {
-                self.put_pixel(center.x + dx, center.y + dy, color);
+    pub fn draw_circle(&mut self, cx: i32, cy: i32, radius: i32, color: Color) {
+        let mut x = radius;
+        let mut y = 0;
+        let mut err = 0;
+        while x >= y {
+            let points = [
+                (cx + x, cy + y),
+                (cx + y, cy + x),
+                (cx - y, cy + x),
+                (cx - x, cy + y),
+                (cx - x, cy - y),
+                (cx - y, cy - x),
+                (cx + y, cy - x),
+                (cx + x, cy - y),
+            ];
+            for (px, py) in points.iter() {
+                self.put_pixel(*px, *py, color);
             }
-            if d < 0 {
-                d += 2 * x + 3;
-            } else {
-                d += 2 * (x - y) + 5;
-                y -= 1;
+            y += 1;
+            if err <= 0 {
+                err += 2 * y + 1;
             }
-            x += 1;
+            if err > 0 {
+                x -= 1;
+                err -= 2 * x + 1;
+            }
         }
     }
 
-    pub fn fill_circle(&mut self, center: Point, radius: u32, color: Color) {
-        let r = radius as i32;
-        for y in -r..=r {
-            for x in -r..=r {
-                if x * x + y * y <= r * r {
-                    self.put_pixel(center.x + x, center.y + y, color);
+    pub fn fill_circle(&mut self, cx: i32, cy: i32, radius: i32, color: Color) {
+        for y in -radius..=radius {
+            for x in -radius..=radius {
+                if x * x + y * y <= radius * radius {
+                    self.put_pixel(cx + x, cy + y, color);
                 }
             }
         }
@@ -307,117 +294,164 @@ impl Sight {
         self.draw_line(p3, p1, color);
     }
 
-    pub fn fill_triangle(&mut self, p1: Point, p2: Point, p3: Point, color: Color) {
+    pub fn fill_triangle(&mut self, mut p1: Point, mut p2: Point, mut p3: Point, color: Color) {
         let mut pts = [p1, p2, p3];
         pts.sort_by_key(|p| p.y);
-        let (p0, p1, p2) = (pts[0], pts[1], pts[2]);
-        let mut fill_span = |y: i32, x0: i32, x1: i32| {
-            for x in x0..=x1 {
+        let [p0, p1, p2] = pts;
+        for y in p0.y..=p2.y {
+            let mut xs = vec![];
+            for (a, b) in &[(p0, p1), (p1, p2), (p0, p2)] {
+                if y >= a.y && y <= b.y {
+                    let t = (y - a.y) as f32 / (b.y - a.y) as f32;
+                    xs.push(a.x + ((b.x - a.x) as f32 * t) as i32);
+                }
+            }
+            xs.sort();
+            for x in xs[0]..=xs[1] {
                 self.put_pixel(x, y, color);
             }
-        };
-        let edge_interp = |y: i32, a: Point, b: Point| -> i32 {
-            if b.y == a.y {
-                a.x
-            } else {
-                a.x + (b.x - a.x) * (y - a.y) / (b.y - a.y)
-            }
-        };
-        for y in p0.y..=p2.y {
-            let x_start = if y < p1.y {
-                edge_interp(y, p0, p1)
-            } else {
-                edge_interp(y, p1, p2)
-            };
-            let x_end = edge_interp(y, p0, p2);
-            fill_span(y, x_start, x_end);
         }
     }
 
-    pub fn draw_rounded_rect(&mut self, r: Rect, rad: u32, color: Color) {
-        self.draw_rect(r, color);
-        let rad_i32 = rad as i32;
-
-        self.draw_circle(Point::new(r.x + rad_i32, r.y + rad_i32), rad, color);
+    pub fn draw_rounded_rect(&mut self, rect: Rect, radius: i32, color: Color) {
+        self.draw_rect(rect, color);
+        self.draw_circle(rect.x + radius, rect.y + radius, radius, color);
         self.draw_circle(
-            Point::new(r.x + r.width as i32 - rad_i32, r.y + rad_i32),
-            rad,
+            rect.x + rect.width as i32 - radius - 1,
+            rect.y + radius,
+            radius,
             color,
         );
         self.draw_circle(
-            Point::new(
-                r.x + r.width as i32 - rad_i32,
-                r.y + r.height as i32 - rad_i32,
+            rect.x + radius,
+            rect.y + rect.height as i32 - radius - 1,
+            radius,
+            color,
+        );
+        self.draw_circle(
+            rect.x + rect.width as i32 - radius - 1,
+            rect.y + rect.height as i32 - radius - 1,
+            radius,
+            color,
+        );
+    }
+
+    pub fn fill_rounded_rect(&mut self, rect: Rect, radius: i32, color: Color) {
+        self.fill_rect(
+            Rect::new(
+                rect.x + radius,
+                rect.y,
+                rect.width - 2 * radius as u32,
+                rect.height,
             ),
-            rad,
             color,
         );
-        self.draw_circle(
-            Point::new(r.x + rad_i32, r.y + r.height as i32 - rad_i32),
-            rad,
+        self.fill_rect(
+            Rect::new(
+                rect.x,
+                rect.y + radius,
+                radius as u32,
+                rect.height - 2 * radius as u32,
+            ),
+            color,
+        );
+        self.fill_rect(
+            Rect::new(
+                rect.x + rect.width as i32 - radius,
+                rect.y + radius,
+                radius as u32,
+                rect.height - 2 * radius as u32,
+            ),
+            color,
+        );
+        self.fill_circle(rect.x + radius, rect.y + radius, radius, color);
+        self.fill_circle(
+            rect.x + rect.width as i32 - radius - 1,
+            rect.y + radius,
+            radius,
+            color,
+        );
+        self.fill_circle(
+            rect.x + radius,
+            rect.y + rect.height as i32 - radius - 1,
+            radius,
+            color,
+        );
+        self.fill_circle(
+            rect.x + rect.width as i32 - radius - 1,
+            rect.y + rect.height as i32 - radius - 1,
+            radius,
             color,
         );
     }
 
-    pub fn draw_arc(&mut self, center: Point, radius: u32, start: f32, end: f32, color: Color) {
-        for deg in (start * 100.0) as i32..=(end * 100.0) as i32 {
-            let rad = (deg as f32 / 100.0).to_radians();
-            let x = center.x + (rad.cos() * radius as f32) as i32;
-            let y = center.y + (rad.sin() * radius as f32) as i32;
-            self.put_pixel(x, y, color);
-        }
-    }
-
-    pub fn fill_gradient_h(&mut self, r: Rect, from: Color, to: Color) {
-        for x in 0..r.width {
-            let t = x as f32 / (r.width - 1) as f32;
-            let col = from.lerp(to, t);
-            for y in 0..r.height {
-                self.put_pixel(r.x + x as i32, r.y + y as i32, col);
+    pub fn fill_gradient_h(&mut self, rect: Rect, c1: Color, c2: Color) {
+        for x in 0..rect.width as i32 {
+            let t = x as f32 / rect.width as f32;
+            let col = c1.lerp(c2, t);
+            for y in 0..rect.height as i32 {
+                self.put_pixel(rect.x + x, rect.y + y, col);
             }
         }
     }
 
-    pub fn fill_gradient_v(&mut self, r: Rect, from: Color, to: Color) {
-        for y in 0..r.height {
-            let t = y as f32 / (r.height - 1) as f32;
-            let col = from.lerp(to, t);
-            for x in 0..r.width {
-                self.put_pixel(r.x + x as i32, r.y + y as i32, col);
+    pub fn fill_gradient_v(&mut self, rect: Rect, c1: Color, c2: Color) {
+        for y in 0..rect.height as i32 {
+            let t = y as f32 / rect.height as f32;
+            let col = c1.lerp(c2, t);
+            for x in 0..rect.width as i32 {
+                self.put_pixel(rect.x + x, rect.y + y, col);
             }
         }
     }
 
-    pub fn draw_bmp(&mut self, img: &bmp::BmpImage, x: i32, y: i32) {
-        for j in 0..img.height {
-            for i in 0..img.width {
-                let idx = (j * img.width + i) * 4;
-                let color = Color {
-                    b: img.data[idx as usize],
-                    g: img.data[idx as usize + 1],
-                    r: img.data[idx as usize + 2],
-                    a: img.data[idx as usize + 3],
-                };
-                self.put_pixel(x + i as i32, y + j as i32, color);
+    pub fn draw_bmp(&mut self, bmp: bmp::BmpImage, x: i32, y: i32) {
+        for row in 0..bmp.height as i32 {
+            for col in 0..bmp.width as i32 {
+                let idx = ((row * bmp.width as i32 + col) * 4) as usize;
+                let color = Color::rgba(
+                    bmp.data[idx],
+                    bmp.data[idx + 1],
+                    bmp.data[idx + 2],
+                    bmp.data[idx + 3],
+                );
+                self.put_pixel(x + col, y + row, color);
             }
         }
     }
 
-    pub fn draw_char(&mut self, font: &bdf::Font, ch: char, x: i32, y: i32, color: Color) {
-        font.draw_char(ch, x, y, |px, py| self.put_pixel(px, py, color));
-    }
-
-    pub fn draw_text(&mut self, font: &bdf::Font, text: &str, x: i32, y: i32, color: Color) {
-        font.draw_text(text, x, y, |px, py| self.put_pixel(px, py, color));
+    pub fn draw_arc(&mut self, cx: i32, cy: i32, radius: i32, start: f32, end: f32, color: Color) {
+        let steps = (radius * 4) as usize;
+        for i in 0..=steps {
+            let t = start + (end - start) * i as f32 / steps as f32;
+            let px = cx + (radius as f32 * cosf(t)) as i32;
+            let py = cy + (radius as f32 * sinf(t)) as i32;
+            self.put_pixel(px, py, color);
+        }
     }
 
     pub fn present(&mut self) -> Result<(), &'static str> {
-        if self.dirty {
-            self.window
-                .update_with_buffer(&self.buffer, self.width as usize, self.height as usize)
-                .map_err(|_| "Failed to update window")?;
-            self.dirty = false;
-        }
+        self.window
+            .update_with_buffer(&self.fb, self.width as usize, self.height as usize)
+            .map_err(|_| "Failed to update window")?;
+        self.dirty = false;
         Ok(())
+    }
+
+    pub fn force_present(&mut self) -> Result<(), &'static str> {
+        self.present()
+    }
+}
+
+trait FloatExt {
+    fn fract(self) -> Self;
+    fn floor(self) -> Self;
+}
+impl FloatExt for f32 {
+    fn fract(self) -> f32 {
+        self - self.floor()
+    }
+    fn floor(self) -> f32 {
+        libm::floorf(self)
     }
 }
