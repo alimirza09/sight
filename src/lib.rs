@@ -46,9 +46,21 @@ impl Color {
             a: (self.a as f32 + (other.a as f32 - self.a as f32) * t) as u8,
         }
     }
+
     pub const BLACK: Color = Color::rgb(0, 0, 0);
     pub const WHITE: Color = Color::rgb(255, 255, 255);
     pub const RED: Color = Color::rgb(255, 0, 0);
+    pub const GREEN: Color = Color::rgb(0, 255, 0);
+    pub const BLUE: Color = Color::rgb(0, 0, 255);
+    pub const YELLOW: Color = Color::rgb(255, 255, 0);
+    pub const CYAN: Color = Color::rgb(0, 255, 255);
+    pub const MAGENTA: Color = Color::rgb(255, 0, 255);
+    pub const ORANGE: Color = Color::rgb(255, 165, 0);
+    pub const PURPLE: Color = Color::rgb(128, 0, 128);
+    pub const GRAY: Color = Color::rgb(128, 128, 128);
+    pub const LIGHT_GRAY: Color = Color::rgb(192, 192, 192);
+    pub const DARK_GRAY: Color = Color::rgb(64, 64, 64);
+    pub const TRANSPARENT: Color = Color::rgba(0, 0, 0, 0);
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
