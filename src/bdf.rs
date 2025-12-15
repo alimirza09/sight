@@ -35,11 +35,10 @@ impl Glyph {
                 let byte_index = row_offset + (col / 8) as usize;
                 let bit_index = 7 - (col % 8);
 
-                if byte_index < self.bitmap.len() {
-                    let byte = self.bitmap[byte_index];
-                    if (byte >> bit_index) & 1 == 1 {
-                        set_pixel(x + col as i32, y + row as i32, color);
-                    }
+                let byte = self.bitmap[byte_index];
+
+                if (byte & (1 << bit_index)) != 0 {
+                    set_pixel(x + col as i32, y + row as i32, color);
                 }
             }
         }
