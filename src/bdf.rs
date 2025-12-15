@@ -24,7 +24,7 @@ impl Glyph {
         F: FnMut(i32, i32, Color),
     {
         x += self.offset_x;
-        y = y - self.height as i32 - self.offset_y;
+        y = y - self.offset_y - self.height as i32 + 1;
 
         let bytes_per_row = ((self.width + 7) / 8) as usize;
 
