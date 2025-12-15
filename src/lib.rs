@@ -108,11 +108,11 @@ impl Rect {
 }
 
 pub struct Sight {
-    fb: Vec<u32>,
-    window: Window,
-    width: u32,
-    height: u32,
-    dirty: bool,
+    pub fb: Vec<u32>,
+    pub window: Window,
+    pub width: u32,
+    pub height: u32,
+    pub dirty: bool,
 }
 
 impl Sight {
