@@ -1,3 +1,4 @@
+use super::Color;
 use std::collections::BTreeMap;
 use std::vec::Vec;
 
@@ -18,9 +19,9 @@ pub struct Glyph {
 }
 
 impl Glyph {
-    pub fn draw<F>(&self, mut x: i32, mut y: i32, mut set_pixel: F)
+    pub fn draw<F>(&self, mut x: i32, mut y: i32, color: Color, mut set_pixel: F)
     where
-        F: FnMut(i32, i32),
+        F: FnMut(i32, i32, super::Color),
     {
         x += self.offset_x;
         y += self.offset_y;
@@ -37,7 +38,7 @@ impl Glyph {
                 if byte_index < self.bitmap.len() {
                     let byte = self.bitmap[byte_index];
                     if (byte >> bit_index) & 1 == 1 {
-                        set_pixel(x + col as i32, y + row as i32);
+                        set_pixel(x + col as i32, y + row as i32, color);
                     }
                 }
             }
@@ -69,24 +70,24 @@ impl Font {
         self.glyphs.get(&(ch as u32))
     }
 
-    pub fn draw_char<F>(&self, ch: char, x: i32, y: i32, set_pixel: F) -> i32
+    pub fn draw_char<F>(&self, ch: char, x: i32, y: i32, color: Color, set_pixel: F) -> i32
     where
-        F: FnMut(i32, i32),
+        F: FnMut(i32, i32, Color),
     {
         if let Some(glyph) = self.get_glyph(ch) {
-            glyph.draw(x, y, set_pixel);
+            glyph.draw(x, y, color, set_pixel);
             glyph.device_width as i32
         } else {
             self.bounding_box.0 as i32
         }
     }
 
-    pub fn draw_text<F>(&self, text: &str, mut x: i32, y: i32, mut set_pixel: F)
+    pub fn draw_text<F>(&self, text: &str, mut x: i32, y: i32, color: Color, mut set_pixel: F)
     where
-        F: FnMut(i32, i32),
+        F: FnMut(i32, i32, Color),
     {
         for ch in text.chars() {
-            let advance = self.draw_char(ch, x, y, &mut set_pixel);
+            let advance = self.draw_char(ch, x, y, color, &mut set_pixel);
             x += advance;
         }
     }
