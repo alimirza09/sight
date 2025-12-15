@@ -21,10 +21,10 @@ pub struct Glyph {
 impl Glyph {
     pub fn draw<F>(&self, mut x: i32, mut y: i32, color: Color, mut set_pixel: F)
     where
-        F: FnMut(i32, i32, super::Color),
+        F: FnMut(i32, i32, Color),
     {
         x += self.offset_x;
-        y += self.offset_y;
+        y = y - self.height as i32 - self.offset_y;
 
         let bytes_per_row = ((self.width + 7) / 8) as usize;
 
