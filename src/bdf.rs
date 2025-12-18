@@ -69,6 +69,22 @@ impl Font {
         self.glyphs.get(&(ch as u32))
     }
 
+    pub fn get_min_offsets(&self) -> (i32, i32) {
+        let mut min_x = 0;
+        let mut min_y = 0;
+
+        for glyph in self.glyphs.values() {
+            if glyph.offset_x < min_x {
+                min_x = glyph.offset_x;
+            }
+            if glyph.offset_y < min_y {
+                min_y = glyph.offset_y;
+            }
+        }
+
+        (min_x, min_y)
+    }
+
     pub fn draw_char<F>(
         &self,
         ch: char,
@@ -92,37 +108,50 @@ impl Font {
     pub fn draw_text<F>(
         &self,
         text: &str,
-        mut x: i32,
-        mut y: i32,
+        x: i32,
+        y: i32,
         color: Color,
         ignore_offsets: bool,
         mut set_pixel: F,
     ) where
         F: FnMut(i32, i32, Color),
     {
-        let start_x = x;
         let line_height = self.text_height() as i32;
+
+        let (start_x, start_y) = if ignore_offsets {
+            let (min_x, min_y) = self.get_min_offsets();
+            (x - min_x, y - min_y)
+        } else {
+            (x, y)
+        };
+
+        let mut current_x = start_x;
+        let mut current_y = start_y;
 
         for ch in text.chars() {
             if ch == '\n' {
-                // Move to next line
-                x = start_x;
-                y += line_height;
+                current_x = start_x;
+                current_y += line_height;
             } else {
-                let advance = self.draw_char(ch, x, y, color, ignore_offsets, &mut set_pixel);
-                x += advance;
+                let advance = self.draw_char(
+                    ch,
+                    current_x,
+                    current_y,
+                    color,
+                    ignore_offsets,
+                    &mut set_pixel,
+                );
+                current_x += advance;
             }
         }
     }
 
     pub fn text_width(&self, text: &str) -> u32 {
-        let mut width = 0;
         let mut max_width = 0;
         let mut current_line_width = 0;
 
         for ch in text.chars() {
             if ch == '\n' {
-                // Track the maximum line width
                 if current_line_width > max_width {
                     max_width = current_line_width;
                 }
@@ -136,7 +165,6 @@ impl Font {
             }
         }
 
-        // Check the last line
         if current_line_width > max_width {
             max_width = current_line_width;
         }
