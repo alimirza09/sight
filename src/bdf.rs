@@ -19,12 +19,12 @@ pub struct Glyph {
 }
 
 impl Glyph {
-    pub fn draw<F>(&self, mut x: i32, mut y: i32, color: Color, mut set_pixel: F)
+    pub fn draw<F>(&self, x: i32, y: i32, color: Color, ignore_offsets: bool, mut set_pixel: F)
     where
         F: FnMut(i32, i32, Color),
     {
-        x += self.offset_x;
-        y += self.offset_y;
+        let draw_x = if ignore_offsets { x } else { x + self.offset_x };
+        let draw_y = if ignore_offsets { y } else { y + self.offset_y };
 
         let bytes_per_row = ((self.width + 7) / 8) as usize;
 
@@ -38,7 +38,7 @@ impl Glyph {
                 let byte = self.bitmap[byte_index];
 
                 if (byte & (1 << bit_index)) != 0 {
-                    set_pixel(x + col as i32, y + row as i32, color);
+                    set_pixel(draw_x + col as i32, draw_y + row as i32, color);
                 }
             }
         }
@@ -69,20 +69,35 @@ impl Font {
         self.glyphs.get(&(ch as u32))
     }
 
-    pub fn draw_char<F>(&self, ch: char, x: i32, y: i32, color: Color, set_pixel: F) -> i32
+    pub fn draw_char<F>(
+        &self,
+        ch: char,
+        x: i32,
+        y: i32,
+        color: Color,
+        ignore_offsets: bool,
+        set_pixel: F,
+    ) -> i32
     where
         F: FnMut(i32, i32, Color),
     {
         if let Some(glyph) = self.get_glyph(ch) {
-            glyph.draw(x, y, color, set_pixel);
+            glyph.draw(x, y, color, ignore_offsets, set_pixel);
             glyph.device_width as i32
         } else {
             self.bounding_box.0 as i32
         }
     }
 
-    pub fn draw_text<F>(&self, text: &str, mut x: i32, mut y: i32, color: Color, mut set_pixel: F)
-    where
+    pub fn draw_text<F>(
+        &self,
+        text: &str,
+        mut x: i32,
+        mut y: i32,
+        color: Color,
+        ignore_offsets: bool,
+        mut set_pixel: F,
+    ) where
         F: FnMut(i32, i32, Color),
     {
         let start_x = x;
@@ -90,21 +105,24 @@ impl Font {
 
         for ch in text.chars() {
             if ch == '\n' {
+                // Move to next line
                 x = start_x;
                 y += line_height;
             } else {
-                let advance = self.draw_char(ch, x, y, color, &mut set_pixel);
+                let advance = self.draw_char(ch, x, y, color, ignore_offsets, &mut set_pixel);
                 x += advance;
             }
         }
     }
 
     pub fn text_width(&self, text: &str) -> u32 {
+        let mut width = 0;
         let mut max_width = 0;
         let mut current_line_width = 0;
 
         for ch in text.chars() {
             if ch == '\n' {
+                // Track the maximum line width
                 if current_line_width > max_width {
                     max_width = current_line_width;
                 }
@@ -118,6 +136,7 @@ impl Font {
             }
         }
 
+        // Check the last line
         if current_line_width > max_width {
             max_width = current_line_width;
         }
