@@ -81,30 +81,59 @@ impl Font {
         }
     }
 
-    pub fn draw_text<F>(&self, text: &str, mut x: i32, y: i32, color: Color, mut set_pixel: F)
+    pub fn draw_text<F>(&self, text: &str, mut x: i32, mut y: i32, color: Color, mut set_pixel: F)
     where
         F: FnMut(i32, i32, Color),
     {
+        let start_x = x;
+        let line_height = self.text_height() as i32;
+
         for ch in text.chars() {
-            let advance = self.draw_char(ch, x, y, color, &mut set_pixel);
-            x += advance;
+            if ch == '\n' {
+                x = start_x;
+                y += line_height;
+            } else {
+                let advance = self.draw_char(ch, x, y, color, &mut set_pixel);
+                x += advance;
+            }
         }
     }
 
     pub fn text_width(&self, text: &str) -> u32 {
-        let mut width = 0;
+        let mut max_width = 0;
+        let mut current_line_width = 0;
+
         for ch in text.chars() {
-            if let Some(glyph) = self.get_glyph(ch) {
-                width += glyph.device_width;
+            if ch == '\n' {
+                if current_line_width > max_width {
+                    max_width = current_line_width;
+                }
+                current_line_width = 0;
             } else {
-                width += self.bounding_box.0;
+                if let Some(glyph) = self.get_glyph(ch) {
+                    current_line_width += glyph.device_width;
+                } else {
+                    current_line_width += self.bounding_box.0;
+                }
             }
         }
-        width
+
+        if current_line_width > max_width {
+            max_width = current_line_width;
+        }
+
+        max_width
     }
 
     pub fn text_height(&self) -> u32 {
         self.bounding_box.1
+    }
+
+    pub fn text_dimensions(&self, text: &str) -> (u32, u32) {
+        let width = self.text_width(text);
+        let line_count = text.chars().filter(|&c| c == '\n').count() + 1;
+        let height = self.text_height() * line_count as u32;
+        (width, height)
     }
 }
 
