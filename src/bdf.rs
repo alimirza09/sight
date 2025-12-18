@@ -19,13 +19,10 @@ pub struct Glyph {
 }
 
 impl Glyph {
-    pub fn draw<F>(&self, x: i32, y: i32, color: Color, ignore_offsets: bool, mut set_pixel: F)
+    pub fn draw<F>(&self, x: i32, y: i32, color: Color, mut set_pixel: F)
     where
         F: FnMut(i32, i32, Color),
     {
-        let draw_x = x;
-        let draw_y = y;
-
         let bytes_per_row = ((self.width + 7) / 8) as usize;
 
         for row in 0..self.height {
@@ -38,7 +35,7 @@ impl Glyph {
                 let byte = self.bitmap[byte_index];
 
                 if (byte & (1 << bit_index)) != 0 {
-                    set_pixel(draw_x + col as i32, draw_y + row as i32, color);
+                    set_pixel(x + col as i32, y + row as i32, color);
                 }
             }
         }
@@ -85,35 +82,20 @@ impl Font {
         (min_x, min_y)
     }
 
-    pub fn draw_char<F>(
-        &self,
-        ch: char,
-        x: i32,
-        y: i32,
-        color: Color,
-        ignore_offsets: bool,
-        set_pixel: F,
-    ) -> i32
+    pub fn draw_char<F>(&self, ch: char, x: i32, y: i32, color: Color, set_pixel: F) -> i32
     where
         F: FnMut(i32, i32, Color),
     {
         if let Some(glyph) = self.get_glyph(ch) {
-            glyph.draw(x, y, color, ignore_offsets, set_pixel);
-            glyph.device_width as i32
+            glyph.draw(x, y, color, set_pixel);
+            glyph.width as i32
         } else {
             self.bounding_box.0 as i32
         }
     }
 
-    pub fn draw_text<F>(
-        &self,
-        text: &str,
-        x: i32,
-        y: i32,
-        color: Color,
-        ignore_offsets: bool,
-        mut set_pixel: F,
-    ) where
+    pub fn draw_text<F>(&self, text: &str, x: i32, y: i32, color: Color, mut set_pixel: F)
+    where
         F: FnMut(i32, i32, Color),
     {
         let line_height = self.text_height() as i32;
@@ -125,14 +107,7 @@ impl Font {
                 current_x = x;
                 current_y += line_height;
             } else {
-                let advance = self.draw_char(
-                    ch,
-                    current_x,
-                    current_y,
-                    color,
-                    ignore_offsets,
-                    &mut set_pixel,
-                );
+                let advance = self.draw_char(ch, current_x, current_y, color, &mut set_pixel);
                 current_x += advance;
             }
         }
