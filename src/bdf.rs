@@ -23,8 +23,8 @@ impl Glyph {
     where
         F: FnMut(i32, i32, Color),
     {
-        let draw_x = if ignore_offsets { x } else { x + self.offset_x };
-        let draw_y = if ignore_offsets { y } else { y + self.offset_y };
+        let draw_x = x;
+        let draw_y = y;
 
         let bytes_per_row = ((self.width + 7) / 8) as usize;
 
@@ -117,20 +117,12 @@ impl Font {
         F: FnMut(i32, i32, Color),
     {
         let line_height = self.text_height() as i32;
-
-        let (start_x, start_y) = if ignore_offsets {
-            let (min_x, min_y) = self.get_min_offsets();
-            (x - min_x, y - min_y)
-        } else {
-            (x, y)
-        };
-
-        let mut current_x = start_x;
-        let mut current_y = start_y;
+        let mut current_x = x;
+        let mut current_y = y;
 
         for ch in text.chars() {
             if ch == '\n' {
-                current_x = start_x;
+                current_x = x;
                 current_y += line_height;
             } else {
                 let advance = self.draw_char(
