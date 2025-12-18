@@ -82,6 +82,15 @@ impl Font {
         (min_x, min_y)
     }
 
+    pub fn debug_glyph(&self, ch: char) {
+        if let Some(glyph) = self.get_glyph(ch) {
+            println!(
+                "Glyph '{}': width={}, height={}, offset_x={}, offset_y={}, device_width={}",
+                ch, glyph.width, glyph.height, glyph.offset_x, glyph.offset_y, glyph.device_width
+            );
+        }
+    }
+
     pub fn draw_char<F>(&self, ch: char, x: i32, y: i32, color: Color, set_pixel: F) -> i32
     where
         F: FnMut(i32, i32, Color),
