@@ -5,6 +5,7 @@ use std::vec::Vec;
 #[derive(Debug, Clone)]
 pub enum FontType {
     BDF,
+    TTF,
 }
 
 #[derive(Debug, Clone)]

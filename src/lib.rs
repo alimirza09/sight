@@ -3,6 +3,7 @@ use libm::{cosf, sinf, sqrtf};
 use minifb::{Scale, ScaleMode, Window, WindowOptions};
 pub mod bdf;
 pub mod bmp;
+pub mod ttf;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Color {
