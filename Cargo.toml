@@ -6,8 +6,7 @@ edition = "2021"
 [dependencies]
 libm = "0.2"
 minifb = "0.28.0"
-ttf-parser = { version = "0.20", default-features = false }
-ab_glyph_rasterizer = { version = "0.1", default-features = false, features = ["libm"] }
+rusttype = "0.9"
 
 [lib]
 crate-type = ["rlib"]

@@ -1,167 +1,140 @@
 use super::Color;
-use std::collections::BTreeMap;
-use std::vec::Vec;
-
-#[derive(Debug, Clone)]
-pub enum FontType {
-    BDF,
-    TTF,
-}
+use rusttype::{point, Font, Scale};
 
 pub struct TtfFont<'a> {
-    font_data: &'a [u8],
-    cache: BTreeMap<(u32, u32), CachedGlyph>,
-}
-
-#[derive(Clone)]
-struct CachedGlyph {
-    bitmap: Vec<u8>,
-    width: u32,
-    height: u32,
-    bearing_x: i32,
-    bearing_y: i32,
-    advance: u32,
+    font: Font<'a>,
 }
 
 impl<'a> TtfFont<'a> {
     pub fn from_bytes(data: &'a [u8]) -> Result<Self, &'static str> {
-        use ttf_parser::Face;
+        let font = Font::try_from_bytes(data).ok_or("Failed to parse TTF font")?;
 
-        Face::parse(data, 0).map_err(|_| "Invalid TTF file")?;
-
-        Ok(Self {
-            font_data: data,
-            cache: BTreeMap::new(),
-        })
-    }
-
-    fn rasterize_glyph(&mut self, ch: char, size: u32) -> Option<CachedGlyph> {
-        use ab_glyph_rasterizer::Rasterizer;
-        use ttf_parser::Face;
-
-        let face = Face::parse(self.font_data, 0).ok()?;
-        let glyph_id = face.glyph_index(ch)?;
-
-        let units_per_em = face.units_per_em() as f32;
-        let scale = size as f32 / units_per_em;
-
-        let h_advance = face.glyph_hor_advance(glyph_id).unwrap_or(0) as f32 * scale;
-        let bbox = face.glyph_bounding_box(glyph_id)?;
-
-        let bearing_x = (bbox.x_min as f32 * scale) as i32;
-        let bearing_y = (bbox.y_max as f32 * scale) as i32;
-        let width = ((bbox.x_max - bbox.x_min) as f32 * scale).ceil() as u32;
-        let height = ((bbox.y_max - bbox.y_min) as f32 * scale).ceil() as u32;
-
-        if width == 0 || height == 0 {
-            return Some(CachedGlyph {
-                bitmap: Vec::new(),
-                width: 0,
-                height: 0,
-                bearing_x,
-                bearing_y,
-                advance: h_advance as u32,
-            });
-        }
-
-        let mut builder = OutlineConverter::new(scale, bearing_x as f32, bearing_y as f32);
-        face.outline_glyph(glyph_id, &mut builder)?;
-
-        let mut rasterizer = Rasterizer::new(width as usize, height as usize);
-
-        for contour in &builder.contours {
-            if contour.is_empty() {
-                continue;
-            }
-
-            let mut i = 0;
-            while i < contour.len() {
-                let p0 = contour[i];
-                let p1 = if i + 1 < contour.len() {
-                    contour[i + 1]
-                } else {
-                    contour[0]
-                };
-
-                rasterizer.draw_line(p0, p1);
-                i += 1;
-            }
-        }
-
-        let mut bitmap = vec![0u8; (width * height) as usize];
-        rasterizer.for_each_pixel(|index, alpha| {
-            if index < bitmap.len() {
-                bitmap[index] = (alpha * 255.0) as u8;
-            }
-        });
-
-        Some(CachedGlyph {
-            bitmap,
-            width,
-            height,
-            bearing_x,
-            bearing_y,
-            advance: h_advance as u32,
-        })
+        Ok(Self { font })
     }
 
     pub fn draw_text<F>(
-        &mut self,
+        &self,
         text: &str,
         x: i32,
         y: i32,
-        size: u32,
+        size: f32,
         color: Color,
         mut set_pixel: F,
     ) where
         F: FnMut(i32, i32, Color),
     {
-        let mut current_x = x;
-        let mut current_y = y;
+        let scale = Scale::uniform(size);
+        let v_metrics = self.font.v_metrics(scale);
+        let baseline = y + v_metrics.ascent as i32;
+
+        let mut cursor_x = x as f32;
+        let mut cursor_y = baseline as f32;
 
         for ch in text.chars() {
             if ch == '\n' {
-                current_x = x;
-                current_y += size as i32;
+                cursor_x = x as f32;
+                cursor_y += v_metrics.ascent - v_metrics.descent + v_metrics.line_gap;
                 continue;
             }
 
-            let key = (ch as u32, size);
+            let glyph = self.font.glyph(ch).scaled(scale);
+            let h_metrics = glyph.h_metrics();
+            let positioned = glyph.positioned(point(cursor_x, cursor_y));
 
-            if !self.cache.contains_key(&key) {
-                if let Some(glyph) = self.rasterize_glyph(ch, size) {
-                    self.cache.insert(key, glyph);
-                }
-            }
-
-            if let Some(glyph) = self.cache.get(&key) {
-                for row in 0..glyph.height {
-                    for col in 0..glyph.width {
-                        let idx = (row * glyph.width + col) as usize;
-                        let alpha = glyph.bitmap[idx];
-
-                        if alpha > 0 {
-                            let px = current_x + col as i32 + glyph.bearing_x;
-                            let py = current_y - glyph.bearing_y + row as i32;
-
-                            if alpha > 128 {
-                                set_pixel(px, py, color);
-                            }
-                        }
+            if let Some(bb) = positioned.pixel_bounding_box() {
+                positioned.draw(|gx, gy, coverage| {
+                    if coverage > 0.3 {
+                        let px = bb.min.x + gx as i32;
+                        let py = bb.min.y + gy as i32;
+                        set_pixel(px, py, color);
                     }
-                }
-
-                current_x += glyph.advance as i32;
+                });
             }
+
+            cursor_x += h_metrics.advance_width;
+        }
+    }
+
+    pub fn draw_text_antialiased<F>(
+        &self,
+        text: &str,
+        x: i32,
+        y: i32,
+        size: f32,
+        color: Color,
+        fb: &[u32],
+        fb_width: u32,
+        fb_height: u32,
+        mut set_pixel: F,
+    ) where
+        F: FnMut(i32, i32, Color),
+    {
+        let scale = Scale::uniform(size);
+        let v_metrics = self.font.v_metrics(scale);
+        let baseline = y + v_metrics.ascent as i32;
+
+        let mut cursor_x = x as f32;
+        let mut cursor_y = baseline as f32;
+
+        for ch in text.chars() {
+            if ch == '\n' {
+                cursor_x = x as f32;
+                cursor_y += v_metrics.ascent - v_metrics.descent + v_metrics.line_gap;
+                continue;
+            }
+
+            let glyph = self.font.glyph(ch).scaled(scale);
+            let h_metrics = glyph.h_metrics();
+            let positioned = glyph.positioned(point(cursor_x, cursor_y));
+
+            if let Some(bb) = positioned.pixel_bounding_box() {
+                positioned.draw(|gx, gy, coverage| {
+                    if coverage > 0.0 {
+                        let px = bb.min.x + gx as i32;
+                        let py = bb.min.y + gy as i32;
+
+                        let bg = if px >= 0
+                            && py >= 0
+                            && px < fb_width as i32
+                            && py < fb_height as i32
+                        {
+                            let idx = (py as u32 * fb_width + px as u32) as usize;
+                            let pixel = fb[idx];
+                            Color::rgba(
+                                ((pixel >> 16) & 0xFF) as u8,
+                                ((pixel >> 8) & 0xFF) as u8,
+                                (pixel & 0xFF) as u8,
+                                255,
+                            )
+                        } else {
+                            Color::BLACK
+                        };
+
+                        let alpha = (coverage * 255.0) as u8;
+                        let blended = Color::rgba(
+                            ((color.r as u32 * alpha as u32 + bg.r as u32 * (255 - alpha) as u32)
+                                / 255) as u8,
+                            ((color.g as u32 * alpha as u32 + bg.g as u32 * (255 - alpha) as u32)
+                                / 255) as u8,
+                            ((color.b as u32 * alpha as u32 + bg.b as u32 * (255 - alpha) as u32)
+                                / 255) as u8,
+                            255,
+                        );
+                        set_pixel(px, py, blended);
+                    }
+                });
+            }
+
+            cursor_x += h_metrics.advance_width;
         }
     }
 
     pub fn draw_text_bold<F>(
-        &mut self,
+        &self,
         text: &str,
         x: i32,
         y: i32,
-        size: u32,
+        size: f32,
         color: Color,
         mut set_pixel: F,
     ) where
@@ -171,129 +144,54 @@ impl<'a> TtfFont<'a> {
         self.draw_text(text, x + 1, y, size, color, set_pixel);
     }
 
-    pub fn clear_cache(&mut self) {
-        self.cache.clear();
-    }
-
-    pub fn text_width(&mut self, text: &str, size: u32) -> u32 {
-        let mut width = 0;
+    pub fn text_width(&self, text: &str, size: f32) -> f32 {
+        let scale = Scale::uniform(size);
+        let mut width = 0.0;
 
         for ch in text.chars() {
             if ch == '\n' {
                 continue;
             }
 
-            let key = (ch as u32, size);
-
-            if !self.cache.contains_key(&key) {
-                if let Some(glyph) = self.rasterize_glyph(ch, size) {
-                    self.cache.insert(key, glyph);
-                }
-            }
-
-            if let Some(glyph) = self.cache.get(&key) {
-                width += glyph.advance;
-            }
+            let glyph = self.font.glyph(ch).scaled(scale);
+            width += glyph.h_metrics().advance_width;
         }
 
         width
     }
-}
 
-struct OutlineConverter {
-    contours: Vec<Vec<ab_glyph_rasterizer::Point>>,
-    current: Vec<ab_glyph_rasterizer::Point>,
-    current_point: Option<ab_glyph_rasterizer::Point>,
-    scale: f32,
-    offset_x: f32,
-    offset_y: f32,
-}
-
-impl OutlineConverter {
-    fn new(scale: f32, offset_x: f32, offset_y: f32) -> Self {
-        Self {
-            contours: Vec::new(),
-            current: Vec::new(),
-            current_point: None,
-            scale,
-            offset_x,
-            offset_y,
-        }
+    pub fn text_height(&self, size: f32) -> f32 {
+        let scale = Scale::uniform(size);
+        let v_metrics = self.font.v_metrics(scale);
+        v_metrics.ascent - v_metrics.descent + v_metrics.line_gap
     }
 
-    fn transform(&self, x: f32, y: f32) -> ab_glyph_rasterizer::Point {
-        ab_glyph_rasterizer::point(
-            x * self.scale - self.offset_x,
-            self.offset_y - y * self.scale,
-        )
-    }
-}
+    pub fn text_dimensions(&self, text: &str, size: f32) -> (f32, f32) {
+        let scale = Scale::uniform(size);
+        let v_metrics = self.font.v_metrics(scale);
+        let line_height = v_metrics.ascent - v_metrics.descent + v_metrics.line_gap;
 
-impl ttf_parser::OutlineBuilder for OutlineConverter {
-    fn move_to(&mut self, x: f32, y: f32) {
-        if !self.current.is_empty() {
-            self.contours.push(core::mem::take(&mut self.current));
-        }
-        let p = self.transform(x, y);
-        self.current.push(p);
-        self.current_point = Some(p);
-    }
+        let mut max_width = 0.0;
+        let mut current_width = 0.0;
+        let mut line_count = 1;
 
-    fn line_to(&mut self, x: f32, y: f32) {
-        let p = self.transform(x, y);
-        self.current.push(p);
-        self.current_point = Some(p);
-    }
-
-    fn quad_to(&mut self, x1: f32, y1: f32, x: f32, y: f32) {
-        if let Some(p0) = self.current_point {
-            let p1 = self.transform(x1, y1);
-            let p2 = self.transform(x, y);
-
-            let steps = 10;
-            for i in 1..=steps {
-                let t = i as f32 / steps as f32;
-                let t2 = t * t;
-                let mt = 1.0 - t;
-                let mt2 = mt * mt;
-
-                let px = p0.x * mt2 + 2.0 * p1.x * mt * t + p2.x * t2;
-                let py = p0.y * mt2 + 2.0 * p1.y * mt * t + p2.y * t2;
-
-                self.current.push(ab_glyph_rasterizer::point(px, py));
+        for ch in text.chars() {
+            if ch == '\n' {
+                if current_width > max_width {
+                    max_width = current_width;
+                }
+                current_width = 0.0;
+                line_count += 1;
+            } else {
+                let glyph = self.font.glyph(ch).scaled(scale);
+                current_width += glyph.h_metrics().advance_width;
             }
-            self.current_point = Some(p2);
         }
-    }
 
-    fn curve_to(&mut self, x1: f32, y1: f32, x2: f32, y2: f32, x: f32, y: f32) {
-        if let Some(p0) = self.current_point {
-            let p1 = self.transform(x1, y1);
-            let p2 = self.transform(x2, y2);
-            let p3 = self.transform(x, y);
-
-            let steps = 15;
-            for i in 1..=steps {
-                let t = i as f32 / steps as f32;
-                let t2 = t * t;
-                let t3 = t2 * t;
-                let mt = 1.0 - t;
-                let mt2 = mt * mt;
-                let mt3 = mt2 * mt;
-
-                let px = p0.x * mt3 + 3.0 * p1.x * mt2 * t + 3.0 * p2.x * mt * t2 + p3.x * t3;
-                let py = p0.y * mt3 + 3.0 * p1.y * mt2 * t + 3.0 * p2.y * mt * t2 + p3.y * t3;
-
-                self.current.push(ab_glyph_rasterizer::point(px, py));
-            }
-            self.current_point = Some(p3);
+        if current_width > max_width {
+            max_width = current_width;
         }
-    }
 
-    fn close(&mut self) {
-        if !self.current.is_empty() {
-            self.contours.push(core::mem::take(&mut self.current));
-        }
-        self.current_point = None;
+        (max_width, line_height * line_count as f32)
     }
 }

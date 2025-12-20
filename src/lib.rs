@@ -440,6 +440,44 @@ impl Sight {
     pub fn force_present(&mut self) -> Result<(), &'static str> {
         self.present()
     }
+
+    pub fn get_pixel(&self, x: i32, y: i32) -> Color {
+        if x < 0 || y < 0 || x >= self.width as i32 || y >= self.height as i32 {
+            return Color::BLACK;
+        }
+        let idx = (y as u32 * self.width + x as u32) as usize;
+        let pixel = self.fb[idx];
+        Color::rgba(
+            ((pixel >> 16) & 0xFF) as u8,
+            ((pixel >> 8) & 0xFF) as u8,
+            (pixel & 0xFF) as u8,
+            255,
+        )
+    }
+
+    pub fn draw_text_antialiased_ttf<F>(
+        &mut self,
+        font: &self::ttf::TtfFont,
+        text: &str,
+        x: i32,
+        y: i32,
+        size: f32,
+        color: Color,
+    ) {
+        let fb_copy = self.fb.clone();
+
+        font.draw_text_antialiased(
+            text,
+            x,
+            y,
+            size,
+            color,
+            &fb_copy,
+            self.width,
+            self.height,
+            |px, py, c| self.put_pixel(px, py, c),
+        );
+    }
 }
 
 trait FloatExt {
